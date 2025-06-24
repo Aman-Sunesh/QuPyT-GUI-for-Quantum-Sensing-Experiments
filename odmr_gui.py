@@ -3,6 +3,9 @@ import os
 import shutil
 import glob
 import yaml
+import csv
+import json
+import re
 import numpy as np
 import subprocess
 import warnings
@@ -14,7 +17,6 @@ from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtWidgets import QFileDialog, QPlainTextEdit, QMessageBox, QTableWidget, QTableWidgetItem, QTextEdit, QSplitter, QLabel, QGroupBox, QVBoxLayout
 from string import Template
 import pyqtgraph as pg
-import re
 
 warnings = getattr(sys, 'warnoptions', None)
 
@@ -56,6 +58,8 @@ PRESETS = {
     }
 }
 
+LAST_CFG_PATH = Path.home() / '.qupyt' / 'last_config.json'
+
 class ODMRGui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
@@ -63,6 +67,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.setWindowTitle('QuPyt Experiment GUI')
         self.process = None
         self._build_ui()
+
+        # load the default preset into all the widgets
+        self._load_preset(self.exp_combo.currentText())
+
+        # now override with your last‐used JSON, if it exists
+        self._restore_last_config()  
+
         watcher = QtCore.QFileSystemWatcher([os.getcwd()], self)
         watcher.directoryChanged.connect(self._populate_file_selector)
         self._populate_file_selector() 
@@ -180,14 +191,23 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.defaults_btn    = QtWidgets.QPushButton('Load Defaults')
         self.start_setup_btn = QtWidgets.QPushButton('Start')
         self.stop_btn        = QtWidgets.QPushButton('Stop')
+
+        # Save/Load configuration buttons
+        self.save_cfg_btn    = QtWidgets.QPushButton('Save Config…')
+        self.load_cfg_btn    = QtWidgets.QPushButton('Load Config…')
+
         h.addWidget(self.defaults_btn)
         h.addWidget(self.start_setup_btn)
         h.addWidget(self.stop_btn)
+        h.addWidget(self.save_cfg_btn)
+        h.addWidget(self.load_cfg_btn)
         form.addRow(h)
 
         self.defaults_btn.clicked.connect(lambda: self._load_preset(self.exp_combo.currentText()))
         self.start_setup_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
+        self.save_cfg_btn.clicked.connect(self._save_config)
+        self.load_cfg_btn.clicked.connect(self._load_config)
 
 
         # --- Live Tab ---
@@ -256,21 +276,20 @@ class ODMRGui(QtWidgets.QMainWindow):
         meta_layout.addWidget(self.meta_text)
         meta_box.setLayout(meta_layout)
 
-        # 2. Raw Data Explorer
-        raw_box = QGroupBox('Raw Data Explorer')
-        raw_layout = QVBoxLayout()
-        self.raw_view = pg.ImageView()
-        raw_layout.addWidget(self.raw_view)
-        raw_box.setLayout(raw_layout)
-
-        # 3. Processed ODMR Spectrum
+        # 2. Processed ODMR Spectrum
         proc_box = QGroupBox('Processed ODMR Spectrum')
         proc_layout = QVBoxLayout()
         self.proc_plot = pg.PlotWidget()
         proc_layout.addWidget(self.proc_plot)
+
+        # Add a "Save Spectrum" button
+        save_spec_btn = QtWidgets.QPushButton("Save Spectrum…")
+        save_spec_btn.clicked.connect(lambda: self._save_plot(self.proc_plot))
+        proc_layout.addWidget(save_spec_btn, alignment=QtCore.Qt.AlignmentFlag.AlignRight)
+
         proc_box.setLayout(proc_layout)
 
-        # 4. Fit & Parameter Readout
+        # 3. Fit & Parameter Readout
         fit_box = QGroupBox('Fit & Parameters')
         fit_layout = QVBoxLayout()
         self.fit_table = QTableWidget(4, 2)
@@ -281,7 +300,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         fit_layout.addWidget(self.fit_table)
         fit_box.setLayout(fit_layout)
 
-        # 5. Data Summary & “View” Button
+        # 4. Data Summary & “View” Button
         summary_box = QGroupBox("Data Summary")
         summary_layout = QVBoxLayout()
         # placeholder label — we’ll update this in _show_results()
@@ -294,10 +313,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         summary_box.setLayout(summary_layout)
 
         splitter.addWidget(summary_box)
-
-
         splitter.addWidget(meta_box)
-        splitter.addWidget(raw_box)
         splitter.addWidget(proc_box)
         splitter.addWidget(fit_box)
 
@@ -311,8 +327,6 @@ class ODMRGui(QtWidgets.QMainWindow):
         layout.addWidget(self.export_btn)
         self.export_btn.clicked.connect(self._export)
 
-        # Load defaults
-        self._load_preset(self.exp_combo.currentText())
 
     def _start_watcher(self):
         self._suppress_auto_switch = True
@@ -347,6 +361,7 @@ class ODMRGui(QtWidgets.QMainWindow):
     def _clear_waiting_room(self):
         """Delete every file in ~/.qupyt/waiting_room."""
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
+
         if not wait_dir.exists():
             QMessageBox.information(self, "Nothing to clear", "Waiting room directory doesn’t exist.")
             return
@@ -486,6 +501,9 @@ pulse_sequence:
 
         # Prevent the file-selector from auto-jumping us
         self.file_selector.blockSignals(True)
+
+        # snapshot the current GUI values:
+        self._write_last_config()
 
         # spawn the watcher/process as usual
         self._start_watcher()
@@ -642,23 +660,7 @@ pulse_sequence:
 
         self.meta_text.setPlainText(meta_str)
 
-        # 2. Raw Data (append first channel)
-        # Make sure we actually have at least 2D data
-        arr_full = self.data
-        try:
-            arr = arr_full[0, ...].squeeze()
-        except Exception:
-            arr = arr_full.squeeze()
-
-        if arr.ndim >= 2:
-            # transpose so X/Y map correctly
-            self.raw_view.setImage(arr.T, autoLevels=True)
-        else:
-            # clear or show a placeholder if there's no image‐like data
-            self.raw_view.clear()
-            print(f"Skipping raw‐view (array is {arr.ndim}-D)")
-
-        # 3. Processed Spectrum
+        # 2. Processed Spectrum
         arr_mean = self.data.mean(axis=tuple(range(2,self.data.ndim)))  # [ch, steps]
         freqs = np.linspace(cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
                             cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
@@ -669,7 +671,7 @@ pulse_sequence:
             diff = (arr_mean[0]-arr_mean[1])/(arr_mean[0]+arr_mean[1])
             self.proc_plot.plot(freqs, diff, pen='r', symbol='x')
 
-        # 4. Fit to chosen lineshape
+        # 3. Fit to chosen lineshape
         y = arr_mean[0]
         x = freqs  # in Hz
 
@@ -758,6 +760,125 @@ pulse_sequence:
             plt.savefig(path)
             plt.close()
         print(f"Exported data to {path}")
+
+    def _save_plot(self, widget):
+        """Prompt for filename and save given widget (PNG or SVG)."""
+        path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "", "PNG (*.png);;SVG (*.svg)")
+        if not path:
+            return
+        widget.grab().save(path)
+
+    def _save_config(self):
+        """Save current setup parameters to a CSV file."""
+        path, _ = QFileDialog.getSaveFileName(self, "Save Configuration", "", "CSV (*.csv)")
+        if not path:
+            return
+        fields = [
+            'sweep_start','sweep_stop','power',
+            'averages','frames','dynamic_steps',
+            'mode','ref_channels',
+            'mw_duration','read_time','laser_time','max_rate'
+        ]
+        values = [
+            self.start_input.value(),
+            self.stop_input.value(),
+            self.power_input.value(),
+            self.avg_input.value(),
+            self.frames_input.value(),
+            self.dynamic_input.value(),
+            self.mode_input.currentText(),
+            self.refch_input.value(),
+            self.mw_dur.value(),
+            self.read_dur.value(),
+            self.las_dur.value(),
+            self.rate.value(),
+        ]
+        with open(path, 'w', newline='') as f:
+            writer = csv.writer(f)
+            writer.writerow(fields)
+            writer.writerow(values)
+        QMessageBox.information(self, "Saved", f"Configuration saved to:\n{path}")
+
+    def _load_config(self):
+        """Load setup parameters from a CSV file."""
+        path, _ = QFileDialog.getOpenFileName(self, "Load Configuration", "", "CSV (*.csv)")
+
+        if not path:
+            return
+        
+        with open(path, 'r', newline='') as f:
+            reader = csv.DictReader(f)
+            row = next(reader, None)
+
+        if not row:
+            QMessageBox.warning(self, "Error", "No data found in the file.")
+            return
+        
+        # Apply loaded values
+        try:
+            self.start_input.setValue(float(row['sweep_start']))
+            self.stop_input .setValue(float(row['sweep_stop']))
+            self.power_input.setValue(float(row['power']))
+            self.avg_input  .setValue(int  (row['averages']))
+            self.frames_input.setValue(int  (row['frames']))
+            self.dynamic_input.setValue(int(row['dynamic_steps']))
+            self.mode_input .setCurrentText(row['mode'])
+            self.refch_input.setValue(int  (row['ref_channels']))
+            self.mw_dur     .setValue(float(row['mw_duration']))
+            self.read_dur   .setValue(float(row['read_time']))
+            self.las_dur    .setValue(float(row['laser_time']))
+            self.rate       .setValue(int  (row['max_rate']))
+        except Exception as e:
+            QMessageBox.warning(self, "Error", f"Could not parse configuration:\n{e}")
+
+            return 
+        # on successful parse & apply, let the user know
+        QMessageBox.information(self, "Loaded", f"Configuration loaded from:\n{path}")
+        
+    def _restore_last_config(self):
+        """Load last‐used JSON snapshot if present."""
+        try:
+            with open(LAST_CFG_PATH, 'r') as f:
+                cfg = json.load(f)
+        except FileNotFoundError:
+            return
+        # apply values back into the widgets
+        try:
+            self.start_input .setValue(cfg['sweep_start'])
+            self.stop_input  .setValue(cfg['sweep_stop'])
+            self.power_input .setValue(cfg['power'])
+            self.avg_input   .setValue(cfg['averages'])
+            self.frames_input.setValue(cfg['frames'])
+            self.dynamic_input.setValue(cfg['dynamic_steps'])
+            self.mode_input  .setCurrentText(cfg['mode'])
+            self.refch_input .setValue(cfg['ref_channels'])
+            self.mw_dur      .setValue(cfg['mw_duration'])
+            self.read_dur    .setValue(cfg['read_time'])
+            self.las_dur     .setValue(cfg['laser_time'])
+            self.rate        .setValue(cfg['max_rate'])
+        except KeyError:
+            # silently skip if schema mismatch
+            pass
+
+    def _write_last_config(self):
+        """Dump current setup into a JSON file for ‘last used’ recall."""
+        cfg = {
+            'sweep_start':   self.start_input.value(),
+            'sweep_stop':    self.stop_input.value(),
+            'power':         self.power_input.value(),
+            'averages':      self.avg_input.value(),
+            'frames':        self.frames_input.value(),
+            'dynamic_steps': self.dynamic_input.value(),
+            'mode':          self.mode_input.currentText(),
+            'ref_channels':  self.refch_input.value(),
+            'mw_duration':   self.mw_dur.value(),
+            'read_time':     self.read_dur.value(),
+            'laser_time':    self.las_dur.value(),
+            'max_rate':      self.rate.value(),
+        }
+        LAST_CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        with open(LAST_CFG_PATH, 'w') as f:
+            json.dump(cfg, f, indent=2)
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
