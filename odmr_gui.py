@@ -41,20 +41,6 @@ PRESETS = {
         'read_time': 8,
         'laser_time': 150,
         'max_rate': 10000,
-    },
-    'XY8': {
-        'sweep_start': 0,
-        'sweep_stop': 0,
-        'power': 10,
-        'averages': 4,
-        'frames': 50,
-        'dynamic_steps': 10,
-        'mode': 'sum',
-        'ref_channels': 0,
-        'mw_duration': 0.5,
-        'read_time': 10,
-        'laser_time': 100,
-        'max_rate': 20000,
     }
 }
 
