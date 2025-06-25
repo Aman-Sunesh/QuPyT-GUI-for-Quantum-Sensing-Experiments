@@ -233,6 +233,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.live_plot.setLabel('bottom', 'Frequency (GHz)')
         self.live_plot.setLabel('left', 'Counts')
 
+        # ——— Current values display ———
+        hl = QtWidgets.QHBoxLayout()
+        self.freq_label  = QLabel("Frequency: -- GHz")
+        self.count_label = QLabel("Counts: --")
+        for w in (self.freq_label, self.count_label):
+            w.setStyleSheet("font-size: 11pt; font-weight: bold;")
+        hl.addWidget(self.freq_label)   # left‐aligned
+        hl.addStretch()                 # pushes the next widget to the right
+        hl.addWidget(self.count_label)  # right‐aligned
+        live_layout.addLayout(hl)
+
         # Status Section
         status_box = QGroupBox("Status")
         sb = QtWidgets.QHBoxLayout()
@@ -248,16 +259,23 @@ class ODMRGui(QtWidgets.QMainWindow):
         # Progress Section
         prog_box = QGroupBox("Progress")
         pb = QtWidgets.QVBoxLayout()
-        self.step_label = QtWidgets.QLabel('Step 0/0 @ 0 Hz')
+
+        # 1) create the label, then style it
+        self.step_label = QLabel("Step 0/0")
         self.step_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+
+        # 2) now create the bars
         self.sweep_bar  = QtWidgets.QProgressBar()
         self.sweep_bar.setFormat("Sweep %p%")
         self.count_gauge= QtWidgets.QProgressBar()
         self.count_gauge.setFormat("Counts: %v/%m")
+
+        # 3) add to layout
         pb.addWidget(self.step_label)
         pb.addWidget(self.sweep_bar)
         pb.addWidget(self.count_gauge)
         prog_box.setLayout(pb)
+        live_layout.addWidget(prog_box)
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
@@ -550,7 +568,7 @@ pulse_sequence:
         self.log_output.appendPlainText(raw)
 
         for line in raw.splitlines():
-            m = re.search(r"\s*(\d+)/(\d+)\b", line)
+            m = re.search(r"\|\s*(\d+)/(\d+)\b", line)
             if m:
                 step, total = map(int, m.groups())
                 # only update if total matches what we expect
@@ -601,29 +619,43 @@ pulse_sequence:
                 # update live curve
                 self.live_curve.setData(self.live_freqs, self.live_counts)
 
+                # update the little current-values label
+                self.freq_label .setText(f"Frequency: {f:.3f} GHz")
+                self.count_label.setText(f"Counts: {c}")
+
                 # clear for next pair
                 del self._last_freq, self._last_count
 
 
     def _stop(self):
-        # if the watcher is running, kill it
-        if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
+        # (i) Kill the watcher/process if it’s running
+        if self.process and \
+        self.process.state() == QtCore.QProcess.ProcessState.Running:
             self.process.terminate()
+            self.process.waitForFinished(100)
+            if self.process.state() != QtCore.QProcess.ProcessState.NotRunning:
+                self.process.kill()
             pid = self.process.processId()
             print(f"Terminated QuPyt watcher (PID {pid})")
 
-        # now reset the Live‐tab UI
-        # 1) Status LED back to red + idle label
+        # (ii) Reset any Live‐tab UI
         self.status_led.setStyleSheet("background-color: red; border-radius: 8px;")
         self.status_label.setText("Idle")
 
-        # 2) Progress indicators back to zero
-        self.step_label.setText("Step 0/0 @ 0 Hz")
-        self.step_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
+        # Live‐plot data
+        self.live_freqs.clear()
+        self.live_counts.clear()
+        self.live_curve.setData([], [])
+
+        # Current‐values label
+        self.current_vals_label.setText("Frequency: -- GHz    Counts: --")
+
+        # Progress bars
+        self.step_label.setText("Step 0/0 @ 0 GHz")
         self.sweep_bar.setValue(0)
         self.count_gauge.setValue(0)
 
-        # 3) Clear the log output
+        # Clear the log
         self.log_output.clear()
 
     def _on_finished(self):
