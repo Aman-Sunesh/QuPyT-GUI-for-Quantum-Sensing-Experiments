@@ -12,7 +12,6 @@ import warnings
 import matplotlib.pyplot as plt
 from pathlib import Path
 from scipy.optimize import curve_fit
-from pathlib import Path
 from PyQt6 import QtWidgets, QtCore
 from PyQt6.QtWidgets import QFileDialog, QPlainTextEdit, QMessageBox, QTableWidget, QTableWidgetItem, QTextEdit, QSplitter, QLabel, QGroupBox, QVBoxLayout
 from string import Template
@@ -56,6 +55,7 @@ PRESETS = {
         'laser_time': 100,
         'max_rate': 20000,
     }
+    # Add more as needed
 }
 
 LAST_CFG_PATH = Path.home() / '.qupyt' / 'last_config.json'
@@ -67,6 +67,10 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.setWindowTitle('QuPyt Experiment GUI')
         self.process = None
         self._build_ui()
+
+        # for live-plot data
+        self.live_freqs = []
+        self.live_counts = []
 
         # load the default preset into all the widgets
         self._load_preset(self.exp_combo.currentText())
@@ -223,7 +227,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.clear_waiting_btn.clicked.connect(self._clear_waiting_room)
         live_layout.addWidget(self.clear_waiting_btn)
 
-        # ——— Status Section ———
+        # ——— Live ODMR Spectrum Plot ———
+        self.live_plot = pg.PlotWidget()
+        self.live_curve = self.live_plot.plot([], [], pen=None, symbol='o')
+        self.live_plot.setLabel('bottom', 'Frequency (GHz)')
+        self.live_plot.setLabel('left', 'Counts')
+
+        # Status Section
         status_box = QGroupBox("Status")
         sb = QtWidgets.QHBoxLayout()
         self.status_led = QLabel()
@@ -235,7 +245,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         sb.addStretch()
         status_box.setLayout(sb)
 
-        # ——— Progress Section ———
+        # Progress Section
         prog_box = QGroupBox("Progress")
         pb = QtWidgets.QVBoxLayout()
         self.step_label = QtWidgets.QLabel('Step 0/0 @ 0 Hz')
@@ -251,17 +261,28 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
-        live_layout.addWidget(self.log_output)
 
-        # add to live tab
+        # Put plot and console into a splitter for adjustable space
+        live_splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
+        live_splitter.addWidget(self.live_plot)
+        live_splitter.addWidget(self.log_output)
+        
+        # give the plot a weight of 2 and the console 3
+        live_splitter.setStretchFactor(0, 2)
+        live_splitter.setStretchFactor(1, 3)
+        live_layout.addWidget(live_splitter)
+
+        # Status Section
         live_layout.addWidget(status_box)
+
+        # Progress Section 
         live_layout.addWidget(prog_box)
 
         # Results Tab
         res = QtWidgets.QWidget()
         self.tabs.addTab(res, 'Results')
 
-        # ─── File-selector dropdown ───────────────────────────────────────────────────────
+        # ─── File-selector dropdown ───
         self.file_selector = QtWidgets.QComboBox()
         self.file_selector.setToolTip("Select an ODMR .npy file to display")
         self.file_selector.currentTextChanged.connect(self._on_file_selected)
@@ -351,8 +372,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.count_gauge.setMaximum(max_steps)
         self.count_gauge.setValue(0)
 
+        self.max_live_points = max_steps
+
         self.sweep_bar.setValue(0)
         self.process.start(cmd, args)
+
+        # reset our live‐plot buffers
+        self.live_freqs.clear()
+        self.live_counts.clear()
+        self.live_curve.setData([], [])
+        self.last_freq = None
+        self.last_count = None
 
         # flip to Live tab so you can watch logs
         self.tabs.setCurrentIndex(1)
@@ -438,7 +468,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             'max_rate': self.rate.value(),
         }
 
-        tpl = Template(r'''
+        tpl = Template(r'''    # Template for the ODMR experiment
 experiment_type: ODMR
 
 averages: $averages
@@ -517,52 +547,63 @@ pulse_sequence:
 
     def _on_stdout(self):
         raw = bytes(self.process.readAll()).decode('utf-8', errors='ignore')
-        # dump the raw text into your Live log
-        self.log_output.appendPlainText(raw)       
-    
-        for line in raw.splitlines():
-            # parse step progress: look for patterns like '3/10'
-            m = re.search(r"\s*(\d+)/(\d+)\b", line)
+        self.log_output.appendPlainText(raw)
 
+        for line in raw.splitlines():
+            m = re.search(r"\s*(\d+)/(\d+)\b", line)
             if m:
                 step, total = map(int, m.groups())
-                self.total_steps = total
-                
-                if total != getattr(self, 'total_steps', None):
-                    continue
+                # only update if total matches what we expect
+                if total != getattr(self, 'total_steps', total):
+                    self.total_steps = total
 
-                # update step label
-                # try to pull the RF frequency (in Hz) out of the same line:
-                freq_match = re.search(r"frequency.*?([\d\.]+)", line)
+                # try to pull the RF frequency (in Hz) out of the same line for the step label
+                freq_match = re.search(r"frequency.*?([0-9]+(?:\.[0-9]+)?)", line)
                 if freq_match:
-                    # convert to GHz
                     freq_ghz = float(freq_match.group(1)) / 1e9
                     self.step_label.setText(f"Step {step}/{total} @ {freq_ghz:.3f} GHz")
                 else:
-                    # fallback if no freq in this line
                     self.step_label.setText(f"Step {step}/{total}")
-
 
                 # update sweep progress bar
                 pct = int(100 * step/total)
                 self.sweep_bar.setValue(pct)
+
                 # update count gauge as step count gauge
                 self.count_gauge.setMaximum(total)
                 self.count_gauge.setValue(step)
 
             # parse percentage progress if printed by tqdm (e.g. ' 30%|')
-            p = re.search(r"(\d+)%\|", line)
-            if p:
-                pct = int(p.group(1))
-                self.sweep_bar.setValue(pct)
+            if p := re.search(r"(\d+)%\|", line):
+                self.sweep_bar.setValue(int(p.group(1)))
 
-            # placeholder for live count readout parsing
-            # e.g., if output contains 'Counts: 1234', update gauge
-            c = re.search(r"Counts?:\s*(\d+)", line)
-            if c:
-                count = int(c.group(1))
-                # assume max counts corresponds to 100% of gauge
-                self.count_gauge.setValue(count)
+            # ——— now the state‐machine for live plotting ———
+            # 1) catch any frequency line
+            if freq_m := re.search(r"frequency.*?([0-9]+(?:\.[0-9]+)?)", line):
+                self._last_freq = float(freq_m.group(1)) / 1e9
+
+            # 2) catch any count line
+            if count_m := re.search(r"Counts:\s*(\d+)", line):
+                self._last_count = int(count_m.group(1))
+
+            # 3) once we have both, plot and reset
+            if hasattr(self, '_last_freq') and hasattr(self, '_last_count'):
+                f = self._last_freq
+                c = self._last_count
+
+                # append and trim
+                self.live_freqs.append(f)
+                self.live_counts.append(c)
+                if len(self.live_freqs) > self.max_live_points:
+                    self.live_freqs.pop(0)
+                    self.live_counts.pop(0)
+
+                # update live curve
+                self.live_curve.setData(self.live_freqs, self.live_counts)
+
+                # clear for next pair
+                del self._last_freq, self._last_count
+
 
     def _stop(self):
         # if the watcher is running, kill it
@@ -883,6 +924,6 @@ pulse_sequence:
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     win = ODMRGui()
-    win.resize(900, 700)
+    win.resize(900, 800)
     win.show()
     sys.exit(app.exec())
