@@ -110,8 +110,6 @@ class ODMRGui(QtWidgets.QMainWindow):
             QMessageBox.warning(self, "Load error", f"Could not load {filename}:\n{e}")
             return
 
-        # switch to the Results tab
-        self.tabs.setCurrentIndex(2)
         # and redraw everything
         self._show_results()
 
@@ -221,11 +219,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.run_live_btn = QtWidgets.QPushButton("Run experiment")
         self.run_live_btn.clicked.connect(self._deploy_yaml_and_run)
         live_layout.addWidget(self.run_live_btn)
+
+        # Clear Live tab button
+        self.clear_live_btn = QtWidgets.QPushButton("Clear Live")
+        self.clear_live_btn.clicked.connect(self._clear_live)
+        live_layout.addWidget(self.clear_live_btn)
+
         
-        # Clear waiting-room button
-        self.clear_waiting_btn = QtWidgets.QPushButton("Clear waiting room")
-        self.clear_waiting_btn.clicked.connect(self._clear_waiting_room)
-        live_layout.addWidget(self.clear_waiting_btn)
+        # # Clear waiting-room button
+        # self.clear_waiting_btn = QtWidgets.QPushButton("Clear waiting room")
+        # self.clear_waiting_btn.clicked.connect(self._clear_waiting_room)
+        # live_layout.addWidget(self.clear_waiting_btn)
 
         # ——— Live ODMR Spectrum Plot ———
         self.live_plot = pg.PlotWidget()
@@ -422,21 +426,27 @@ class ODMRGui(QtWidgets.QMainWindow):
                 # skip any that can’t be removed
                 print(f"Couldn’t delete {f}: {e}")
 
-        QMessageBox.information(self, "Done", "Waiting room has been cleared.")
-
     def _deploy_yaml_and_run(self):
         desktop_yaml = Path.home() / 'Desktop' / 'ODMR.yaml'
         if not desktop_yaml.exists():
             QMessageBox.warning(self, "Missing YAML", f"Could not find {desktop_yaml}")
             return
 
-        # atomic copy into waiting room
+        # Drop it in once
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
         wait_dir.mkdir(parents=True, exist_ok=True)
         target = wait_dir / 'ODMR.yaml'
         tmp = target.with_suffix('.tmp')
         shutil.copy(desktop_yaml, tmp)
         os.replace(tmp, target)
+
+        # Clear the waiting room (removes that first copy)
+        self._clear_waiting_room()
+
+        # Drop it in again (second “new file” event)
+        tmp2 = target.with_suffix('.tmp')
+        shutil.copy(desktop_yaml, tmp2)
+        os.replace(tmp2, target)
 
         QMessageBox.information(self, "Deployed", "ODMR.yaml deployed—starting run now.")
 
@@ -628,35 +638,26 @@ pulse_sequence:
 
 
     def _stop(self):
-        # (i) Kill the watcher/process if it’s running
-        if self.process and \
-        self.process.state() == QtCore.QProcess.ProcessState.Running:
+        if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
+            # prevent on_finished() from auto‐switching to Results
+            try:
+                self.process.finished.disconnect(self._on_finished)
+            except (TypeError, RuntimeError):
+                pass
+
             self.process.terminate()
             self.process.waitForFinished(100)
+
             if self.process.state() != QtCore.QProcess.ProcessState.NotRunning:
                 self.process.kill()
+
             pid = self.process.processId()
             print(f"Terminated QuPyt watcher (PID {pid})")
 
-        # (ii) Reset any Live‐tab UI
-        self.status_led.setStyleSheet("background-color: red; border-radius: 8px;")
-        self.status_label.setText("Idle")
+        else:
+            print("No running process to stop.")
 
-        # Live‐plot data
-        self.live_freqs.clear()
-        self.live_counts.clear()
-        self.live_curve.setData([], [])
-
-        # Current‐values label
-        self.current_vals_label.setText("Frequency: -- GHz    Counts: --")
-
-        # Progress bars
-        self.step_label.setText("Step 0/0 @ 0 GHz")
-        self.sweep_bar.setValue(0)
-        self.count_gauge.setValue(0)
-
-        # Clear the log
-        self.log_output.clear()
+        self.tabs.setCurrentIndex(1)
 
     def _on_finished(self):
         # refresh the dropdown list…
@@ -664,6 +665,9 @@ pulse_sequence:
         # …and if there’s at least one file, pick the newest
         if self.file_selector.count():
             self.file_selector.setCurrentIndex(self.file_selector.count() - 1)
+
+        self._show_results()
+        self.tabs.setCurrentIndex(2)
 
     def _on_view_data(self):
         # compute full summary and show in a dialog
@@ -798,9 +802,6 @@ pulse_sequence:
         d = self.data
         summary = f"{d.shape}, dtype={d.dtype}, min={d.min():.3g}, max={d.max():.3g}"
         self.summary_label.setText(summary)
-
-        # switch to results tab
-        self.tabs.setCurrentIndex(2)
 
 
     def _export(self):
@@ -952,6 +953,29 @@ pulse_sequence:
         LAST_CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
         with open(LAST_CFG_PATH, 'w') as f:
             json.dump(cfg, f, indent=2)
+
+    def _clear_live(self):
+        # Reset frequency/count labels
+        self.freq_label .setText("Frequency: -- GHz")
+        self.count_label.setText("Counts: --")
+
+        # Clear live plot
+        self.live_curve.setData([], [])
+
+        # Clear terminal log
+        self.log_output.clear()
+
+        # Reset status
+        self.status_led.setStyleSheet("background-color: red; border-radius: 8px;")
+        self.status_label.setText("Idle")
+
+        # Reset progress bars & step label
+        self.step_label.setText("Step 0/0")
+        self.sweep_bar.setValue(0)
+        self.count_gauge.setValue(0)
+
+        # Also clear out the waiting room directory
+        self._clear_waiting_room()
 
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
