@@ -121,12 +121,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.tabs.addTab(setup, 'Setup')
         form = QtWidgets.QFormLayout(setup)
         self.setup_form = form
-
-        # Watcher button
-        self.start_watcher_btn = QtWidgets.QPushButton("Start watcher")
-        self.start_watcher_btn.clicked.connect(self._start_watcher)
-        form.addRow(self.start_watcher_btn)
-
+      
         # Experiment type
         self.exp_combo = QtWidgets.QComboBox()
         self.exp_combo.addItems(self.experiment_descs.keys())
