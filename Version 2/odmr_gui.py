@@ -6,6 +6,8 @@ import yaml
 import csv
 import json
 import re
+import time 
+import warnings
 import numpy as np
 import pyqtgraph as pg
 import importlib
@@ -19,13 +21,14 @@ from PyQt6.QtWidgets import (QFileDialog, QPlainTextEdit, QMessageBox, QTableWid
                              QTextEdit, QSplitter, QLabel, QGroupBox, QVBoxLayout, QFormLayout,
                              QSpinBox, QDoubleSpinBox)
 
-from presets import PRESETS
 from utils import lorentzian, gaussian
 from odmr_yaml import render_experiment_yaml
 from channels import CHANNEL_MAPPING
 from experiment_factory import load_experiments
 from experiment_editor import ExperimentEditor
 from generic_generator import generate_from_descriptor
+
+warnings = getattr(sys, 'warnoptions', None)
 
 # Global exception hook
 logging.basicConfig(level=logging.ERROR)
@@ -162,6 +165,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         # Averaging & Acquisition
         self.avg_input = QtWidgets.QSpinBox()
         self.frames_input = QtWidgets.QSpinBox()
+        self.param_widgets['frames'] = self.frames_input
         self.dynamic_input = QtWidgets.QSpinBox()
         self.avg_input   .setRange(0, 9999)
         self.frames_input.setRange(0, 9999)
@@ -206,6 +210,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.start_pulse_dur.setValue(10.0)       # default 10 μs
 
         form.addRow('Start pulse duration:', self.start_pulse_dur)
+        self.param_widgets['start_pulse_dur'] = self.start_pulse_dur
 
 
         # Pulse controls
@@ -513,19 +518,36 @@ class ODMRGui(QtWidgets.QMainWindow):
 
     def _deploy_yaml_and_run(self):
         desktop_yaml = Path.home() / 'Desktop' / 'ODMR.yaml'
+
         if not desktop_yaml.exists():
             QMessageBox.critical(self, "Deployment Error", f"Could not find {desktop_yaml}")
             return
-        
-        # atomic copy into waiting room
+
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
         wait_dir.mkdir(parents=True, exist_ok=True)
         target = wait_dir / 'ODMR.yaml'
-        tmp = target.with_suffix('.tmp')
-        shutil.copy(desktop_yaml, tmp)
-        os.replace(tmp, target)
 
-        QMessageBox.information(self, "Deployed", "ODMR.yaml deployed—starting run now.")
+        # 1) initial atomic deploy
+        tmp1 = target.with_suffix('.tmp')
+        shutil.copy(desktop_yaml, tmp1)
+        os.replace(tmp1, target)
+
+        # 2) after 1 s clear out the waiting room
+        QtCore.QTimer.singleShot(1000, lambda: self._phase_two(deploy_path=desktop_yaml, target=target))
+ 
+
+    def _phase_two(self, deploy_path: Path, target: Path):
+        # clear everything in waiting_room
+        self._clear_waiting_room()
+
+        # 3) after another 1 s, redeploy
+        def do_redeploy():
+            tmp2 = target.with_suffix('.tmp')
+            shutil.copy(deploy_path, tmp2)
+            os.replace(tmp2, target)
+            QMessageBox.information(self, "Deployed", f"{target.name} deployed—starting run now.")
+
+        QtCore.QTimer.singleShot(1000, do_redeploy)
 
 
     def make_widget_for(self, p: dict):
@@ -574,16 +596,21 @@ class ODMRGui(QtWidgets.QMainWindow):
             "ps_path":          desc.get("pulse_generator",""),
 
             # pulse sequence timings:
-            "mw_duration":      self.mw_dur.value(),
-            "laser_time":       self.las_dur.value(),
-            "read_time":        self.read_dur.value(),
+            "mw_duration":      self.mw_dur.value()   * self.time_factor,
+            "laserduration":    self.las_dur.value()  * self.time_factor,
+            "read_time":        self.read_dur.value() * self.time_factor,
             "max_rate":         self.rate.value(),
+            "time_unit":     self.unit_combo.currentText(),
         }
 
-        # grab every dynamic parameter:
+        # now grab all other dynamic params, converting any timing ones
         for name, w in self.param_widgets.items():
             if isinstance(w, (QtWidgets.QSpinBox, QtWidgets.QDoubleSpinBox)):
-                vals[name] = w.value()
+                val = w.value()
+                # if this is one of your Jinja timing parameters, convert to µs
+                if name in ("start_pulse_dur", "I_pulse", "Q_pulse", "tau"):
+                    val *= self.time_factor
+                vals[name] = val
             else:
                 vals[name] = w.currentText()
 
@@ -608,10 +635,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Force ourselves to the Live tab
         self.tabs.setCurrentIndex(1)
-
-        # After a short delay (once the watcher is truly up), re-enable combo signals
-        QtCore.QTimer.singleShot(200, lambda: self.file_selector.blockSignals(False))
-
+        
 
     def _on_stdout(self):
         try:
@@ -895,7 +919,8 @@ class ODMRGui(QtWidgets.QMainWindow):
             'sweep_start','sweep_stop','power',
             'averages','frames','dynamic_steps',
             'mode','ref_channels',
-            'mw_duration','read_time','laser_time','max_rate'
+            'mw_duration','read_time',
+            'laserduration', 'time_unit', 'max_rate'
         ]
         values = [
             self.start_input.value(),
@@ -909,6 +934,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.mw_dur.value(),
             self.read_dur.value(),
             self.las_dur.value(),
+            self.unit_combo.currentText(), 
             self.rate.value(),
         ]
         with open(path, 'w', newline='') as f:
@@ -944,7 +970,11 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.refch_input.setValue(int  (row['ref_channels']))
             self.mw_dur     .setValue(float(row['mw_duration']))
             self.read_dur   .setValue(float(row['read_time']))
-            self.las_dur    .setValue(float(row['laser_time']))
+            self.las_dur    .setValue(float(row['laserduration']))
+
+            unit = row.get('time_unit', 'µs')
+            self.unit_combo.setCurrentText(unit)
+            
             self.rate       .setValue(int  (row['max_rate']))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not parse configuration:\n{e}")
@@ -980,7 +1010,11 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.refch_input .setValue(cfg['ref_channels'])
             self.mw_dur      .setValue(cfg['mw_duration'])
             self.read_dur    .setValue(cfg['read_time'])
-            self.las_dur     .setValue(cfg['laser_time'])
+            self.las_dur     .setValue(cfg['laserduration'])
+
+            unit = cfg.get('time_unit', 'µs')
+            self.unit_combo.setCurrentText(unit)
+
             self.rate        .setValue(cfg['max_rate'])
         except KeyError:
             # silently skip if schema mismatch
@@ -999,7 +1033,8 @@ class ODMRGui(QtWidgets.QMainWindow):
             'ref_channels':  self.refch_input.value(),
             'mw_duration':   self.mw_dur.value(),
             'read_time':     self.read_dur.value(),
-            'laser_time':    self.las_dur.value(),
+            'laserduration':    self.las_dur.value(),
+            'time_unit':     self.unit_combo.currentText(),
             'max_rate':      self.rate.value(),
         }
         LAST_CFG_PATH.parent.mkdir(parents=True, exist_ok=True)
@@ -1042,7 +1077,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         for sb in (
             self.las_dur, self.mw_dur,
             self.read_dur, self.I_pulse_dur, self.Q_pulse_dur,
-            self.tau_input, self.blocks_input
+            self.tau_input, self.blocks_input, self.start_pulse_dur
         ):
             sb.valueChanged.connect(self._update_pulse_diagram)
 
@@ -1150,18 +1185,29 @@ class ODMRGui(QtWidgets.QMainWindow):
         for k, v in ctx["constants"].items():
             ctx[k] = v
 
+
         # render each pulse
-        pulses = []
+
+        # start with the START trigger from the GUI
+        start_dur = ctx.get("start_pulse_dur", 1.0)
+        pulses = [("START", 0.0, start_dur)]
+ 
+        # then add all the pulses from your descriptor
         for p in desc.get("pulses", []):
+            if p.get("channel") == "START":
+                continue
+
             ch = p["channel"]
             s_expr = p["start"]
             d_expr = p["duration"]
+
             try:
-                s = float(Template(s_expr).render(ctx))
-                d = float(Template(d_expr).render(ctx))
+                s = float(Template(p["start"]).render(ctx)) * self.time_factor
+                d = float(Template(p["duration"]).render(ctx)) * self.time_factor
             except Exception as e:
                 # skip bad rows
                 continue
+            
             pulses.append((ch, s, d))
 
         return pulses
@@ -1170,6 +1216,9 @@ class ODMRGui(QtWidgets.QMainWindow):
     def _update_time_units(self, unit):
         # convert suffix to µs-space: ns→1e-3, µs→1, ms→1e3
         factor  = {'ns': 1e-3, 'µs': 1.0, 'ms': 1e3}[unit]
+
+        # store so we can convert back to µs when generating pulses/YAML
+        self.time_factor = factor
 
         # update the X-axis label
         self.pulse_plot.setLabel('bottom', f'Time ({unit})')
@@ -1183,7 +1232,8 @@ class ODMRGui(QtWidgets.QMainWindow):
              self.read_dur,
              self.I_pulse_dur,
              self.Q_pulse_dur,
-             self.tau_input
+             self.tau_input,
+             self.start_pulse_dur 
          ):   
             sb.blockSignals(True)
             sb.setRange(0.0, max_val)

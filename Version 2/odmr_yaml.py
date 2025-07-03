@@ -12,9 +12,15 @@ def render_experiment_yaml(vals: dict, output_path: str):
         MW, LASER, READ, START, n_dynamic_steps,
         address, freq_start, freq_stop, power,
         mode, ref_channels, ps_path,
-        mw_duration, laser_time, read_time, max_rate
+        mw_duration, laserduration, read_time, max_rate
     Optionally: I_pulse, Q_pulse, tau, blocks.
     """
+    # convert GUI times to µs
+    unit        = vals.get('time_unit', 'µs')
+    unit_factor = {'ns': 1e-3, 'µs': 1.0, 'ms': 1e3}[unit]
+    mw_dur    = vals['mw_duration']   * unit_factor
+    laser_dur = vals['laserduration'] * unit_factor
+    read_dur  = vals['read_time']     * unit_factor
 
     # Base structure
     cfg = {
@@ -52,9 +58,9 @@ def render_experiment_yaml(vals: dict, output_path: str):
         },
         'ps_path': vals['ps_path'],
         'pulse_sequence': {
-            'mw_duration': vals['mw_duration'],
-            'laserduration': vals['laser_time'],
-            'readout_time': vals['read_time'],
+            'mw_duration': mw_dur,
+            'laserduration': laser_dur,
+            'readout_time': read_dur,
             'referenced_measurements': vals['frames'],
             'max_framerate': vals['max_rate']
         }
@@ -62,18 +68,18 @@ def render_experiment_yaml(vals: dict, output_path: str):
 
     # Inject the extra channels into the synchroniser mapping if they’re in vals
     for chan in ('I', 'Q'):
-        key = f'{chan.lower()}_pulse'
+        key = f'{chan}_pulse'
         if key in vals and vals[key] > 0:
             idx_key = f'{chan}_channel'
             if idx_key in vals:
                 cfg['synchroniser']['channel_mapping'][chan] = vals[idx_key]
 
             # also record duration in the pulse_sequence block
-            cfg['pulse_sequence'][f'{chan.lower()}_pulse_duration'] = vals[key]
+            cfg['pulse_sequence'][f'{chan.lower()}_pulse_duration'] = vals[key] * unit_factor
 
     # And the other parameters (tau, blocks)
     if 'tau' in vals:
-        cfg['pulse_sequence']['tau'] = vals['tau']
+        cfg['pulse_sequence']['tau'] = vals['tau'] * unit_factor
     if 'blocks' in vals:
         cfg['pulse_sequence']['blocks'] = vals['blocks']
 

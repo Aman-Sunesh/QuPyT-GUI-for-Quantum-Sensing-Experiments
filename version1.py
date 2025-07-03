@@ -38,7 +38,7 @@ PRESETS = {
         'ref_channels': 2,
         'mw_duration': 20,
         'read_time': 8,
-        'laser_time': 150,
+        'laserduration': 150,
         'max_rate': 10000,
     },
     'XY8': {
@@ -52,7 +52,7 @@ PRESETS = {
         'ref_channels': 0,
         'mw_duration': 0.5,
         'read_time': 10,
-        'laser_time': 100,
+        'laserduration': 100,
         'max_rate': 20000,
     }
     # Add more as needed
@@ -463,7 +463,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.refch_input.setValue(p['ref_channels'])
         self.mw_dur.setValue(p['mw_duration'])
         self.read_dur.setValue(p['read_time'])
-        self.las_dur.setValue(p['laser_time'])
+        self.las_dur.setValue(p['laserduration'])
         self.rate.setValue(p['max_rate'])
         self.smooth_input.setValue(1)
         self.fit_input.setCurrentText('Lorentzian')
@@ -491,7 +491,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             'ref_channels': self.refch_input.value(),
             'ps_path': str(Path(__file__).parent / 'odmr_sample_pulse_sequence.py'),
             'mw_duration': self.mw_dur.value(),
-            'laser_time': self.las_dur.value(),
+            'laserduration': self.las_dur.value(),
             'read_time': self.read_dur.value(),
             'max_rate': self.rate.value(),
         }
@@ -545,7 +545,7 @@ ps_path: '$ps_path'
 
 pulse_sequence:
   mw_duration: $mw_duration
-  laserduration: $laser_time
+  laserduration: $laserduration
   readout_time: $read_time
   referenced_measurements: *nframes
   max_framerate: $max_rate
@@ -851,7 +851,7 @@ pulse_sequence:
             'sweep_start','sweep_stop','power',
             'averages','frames','dynamic_steps',
             'mode','ref_channels',
-            'mw_duration','read_time','laser_time','max_rate'
+            'mw_duration','read_time','laserduration','max_rate'
         ]
         values = [
             self.start_input.value(),
@@ -900,7 +900,7 @@ pulse_sequence:
             self.refch_input.setValue(int  (row['ref_channels']))
             self.mw_dur     .setValue(float(row['mw_duration']))
             self.read_dur   .setValue(float(row['read_time']))
-            self.las_dur    .setValue(float(row['laser_time']))
+            self.las_dur    .setValue(float(row['laserduration']))
             self.rate       .setValue(int  (row['max_rate']))
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not parse configuration:\n{e}")
@@ -928,7 +928,7 @@ pulse_sequence:
             self.refch_input .setValue(cfg['ref_channels'])
             self.mw_dur      .setValue(cfg['mw_duration'])
             self.read_dur    .setValue(cfg['read_time'])
-            self.las_dur     .setValue(cfg['laser_time'])
+            self.las_dur     .setValue(cfg['laserduration'])
             self.rate        .setValue(cfg['max_rate'])
         except KeyError:
             # silently skip if schema mismatch
@@ -947,7 +947,7 @@ pulse_sequence:
             'ref_channels':  self.refch_input.value(),
             'mw_duration':   self.mw_dur.value(),
             'read_time':     self.read_dur.value(),
-            'laser_time':    self.las_dur.value(),
+            'laserduration':    self.las_dur.value(),
             'max_rate':      self.rate.value(),
         }
         LAST_CFG_PATH.parent.mkdir(parents=True, exist_ok=True)

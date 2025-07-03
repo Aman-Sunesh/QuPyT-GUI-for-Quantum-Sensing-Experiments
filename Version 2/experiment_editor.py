@@ -25,6 +25,7 @@ from channels import CHANNEL_MAPPING
 class ExperimentEditor(QtWidgets.QDialog):
     def __init__(self, parent=None, descriptor_path=None, experiments_dir=None):
         super().__init__(parent)
+        self.time_factor = 1.0
         self.resize(800, 900)
         self.setMinimumSize(800, 900)
         self.setWindowTitle("Add Experiment" if descriptor_path is None else "Edit Experiment")
@@ -410,8 +411,8 @@ class ExperimentEditor(QtWidgets.QDialog):
             dur_expr   = self.pulse_tbl.cellWidget(r,2).text().strip()
 
             try:
-                s = float(Template(start_expr).render(ctx))
-                d = float(Template(dur_expr).render(ctx))
+                s = float(Template(start_expr).render(ctx)) * self.time_factor
+                d = float(Template(dur_expr).render(ctx)) * self.time_factor
             except:
                 continue
 
