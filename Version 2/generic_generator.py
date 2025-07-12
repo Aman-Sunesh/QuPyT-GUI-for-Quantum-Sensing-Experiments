@@ -1,3 +1,5 @@
+# generic_generator.py
+
 import logging
 from jinja2 import Template
 from qupyt.pulse_sequences.yaml_sequence import YamlSequence
