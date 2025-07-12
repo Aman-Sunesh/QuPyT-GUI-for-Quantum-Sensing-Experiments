@@ -1,3 +1,5 @@
+# experiment_editor.py
+
 import csv
 import yaml
 import pyqtgraph as pg
