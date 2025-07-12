@@ -1,3 +1,5 @@
+# odmr_gui.py
+
 import sys
 import os
 import shutil
@@ -22,11 +24,13 @@ from PyQt6.QtWidgets import (QFileDialog, QPlainTextEdit, QMessageBox, QTableWid
                              QSpinBox, QDoubleSpinBox)
 
 from utils import lorentzian, gaussian
-from odmr_yaml import render_experiment_yaml
+from GUI.experiment_yaml import render_experiment_yaml
 from channels import CHANNEL_MAPPING
 from experiment_factory import load_experiments
 from experiment_editor import ExperimentEditor
 from generic_generator import generate_from_descriptor
+from stop_pb import stop_pulse_blaster
+from GUI.power_supply import PowerSupplyDialog
 
 warnings = getattr(sys, 'warnoptions', None)
 
@@ -121,12 +125,12 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.tabs.addTab(setup, 'Setup')
         form = QtWidgets.QFormLayout(setup)
         self.setup_form = form
-
+        
         # Watcher button
         self.start_watcher_btn = QtWidgets.QPushButton("Start watcher")
         self.start_watcher_btn.clicked.connect(self._start_watcher)
         form.addRow(self.start_watcher_btn)
-      
+
         # Experiment type
         self.exp_combo = QtWidgets.QComboBox()
         self.exp_combo.addItems(self.experiment_descs.keys())
@@ -258,7 +262,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.defaults_btn    = QtWidgets.QPushButton('Load Defaults')
         self.defaults_btn.clicked.connect(self._load_defaults)
         self.start_setup_btn = QtWidgets.QPushButton('Start')
-        self.stop_btn        = QtWidgets.QPushButton('Stop')
+        self.stop_btn = QtWidgets.QPushButton('Stop')
 
         # Save/Load configuration buttons
         self.save_cfg_btn    = QtWidgets.QPushButton('Save Config…')
@@ -269,10 +273,16 @@ class ODMRGui(QtWidgets.QMainWindow):
         h.addWidget(self.stop_btn)
         h.addWidget(self.save_cfg_btn)
         h.addWidget(self.load_cfg_btn)
+
+        # Power-Supply Settings 
+        self.powersupply_btn = QtWidgets.QPushButton("Power Supply…")
+        self.powersupply_btn.clicked.connect(self._open_power_supply_dialog)
+        form.addRow(self.powersupply_btn)
+
         form.addRow(h)
 
         self.start_setup_btn.clicked.connect(self._start)
-        self.stop_btn.clicked.connect(self._stop)
+        self.stop_btn.clicked.connect(self._double_stop)        
         self.save_cfg_btn.clicked.connect(self._save_config)
         self.load_cfg_btn.clicked.connect(self._load_config)
 
@@ -706,6 +716,11 @@ class ODMRGui(QtWidgets.QMainWindow):
                 del self._last_freq, self._last_count
 
     def _stop(self):
+        try:
+            stop_pulse_blaster()
+        except Exception as e:
+            pass
+        
         if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
             # prevent on_finished() from auto‐switching to Results
             try:
@@ -726,6 +741,17 @@ class ODMRGui(QtWidgets.QMainWindow):
             print("No running process to stop.")
 
         self.tabs.setCurrentIndex(1)
+
+    def _double_stop(self):
+        # first kill
+        self._stop()
+        # then schedule a second one 50 ms later to 
+        # ensure that pulses are not sent by the synchroniser
+        QtCore.QTimer.singleShot(50, self._stop)
+
+    def _open_power_supply_dialog(self):
+        dlg = PowerSupplyDialog(self)
+        dlg.exec()
 
     def _on_finished(self):
         # refresh the dropdown list…
@@ -809,8 +835,8 @@ class ODMRGui(QtWidgets.QMainWindow):
         arr_mean = self.data.mean(axis=tuple(range(2,self.data.ndim)))  # [ch, steps]
         freqs = np.linspace(cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
                             cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
-                            arr_mean.shape[1])
-        self.proc_plot.clear()
+                            arr_mean.shape[1]) / 1e9  # GHz
+        self.proc_plot.clear() 
         self.proc_plot.plot(freqs, arr_mean[0], pen='b', symbol='o')
         if cfg['data']['reference_channels']>1:
             diff = (arr_mean[0]-arr_mean[1])/(arr_mean[0]+arr_mean[1])
