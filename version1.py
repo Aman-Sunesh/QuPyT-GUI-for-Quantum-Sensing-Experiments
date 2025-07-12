@@ -19,6 +19,9 @@ from PyQt6.QtWidgets import (QFileDialog, QPlainTextEdit, QMessageBox, QTableWid
                               QLabel, QGroupBox, QVBoxLayout, QFormLayout, QDialog, QDoubleSpinBox, QPushButton)
 from string import Template
 import pyqtgraph as pg
+import nidaqmx
+from nidaqmx.constants import AcquisitionType
+from stop_pb import stop_pulse_blaster
 
 warnings = getattr(sys, 'warnoptions', None)
 
@@ -81,6 +84,8 @@ class ODMRGui(QtWidgets.QMainWindow):
         # for live-plot data
         self.live_freqs = []
         self.live_counts = []
+        self.live_daq = []
+        self._daq_buffer = []
 
         # load the default preset into all the widgets
         self._load_preset(self.exp_combo.currentText())
@@ -182,7 +187,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         for sb in (self.mw_dur, self.read_dur, self.las_dur):
             sb.setMinimum(0.0)
-            sb.setMaximum(999.0)
+            sb.setMaximum(9999999.0)
             sb.setDecimals(2)
     
         self.rate.setMinimum(1)
@@ -220,6 +225,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.defaults_btn.clicked.connect(lambda: self._load_preset(self.exp_combo.currentText()))
         self.start_setup_btn.clicked.connect(self._start)
         self.stop_btn.clicked.connect(self._stop)
+        self.stop_btn.clicked.connect(self._stop)
         self.save_cfg_btn.clicked.connect(self._save_config)
         self.load_cfg_btn.clicked.connect(self._load_config)
 
@@ -244,10 +250,16 @@ class ODMRGui(QtWidgets.QMainWindow):
         # live_layout.addWidget(self.clear_waiting_btn)
 
         # ——— Live ODMR Spectrum Plot ———
-        self.live_plot = pg.PlotWidget()
+        self.live_plot = pg.PlotWidget(title="ODMR Spectrum")
         self.live_curve = self.live_plot.plot([], [], pen=None, symbol='o')
         self.live_plot.setLabel('bottom', 'Frequency (GHz)')
         self.live_plot.setLabel('left', 'Counts')
+
+        # ——— Live DAQ Voltage Plot ———
+        self.daq_plot = pg.PlotWidget(title="DAQ Voltage")
+        self.daq_curve = self.daq_plot.plot([], [], pen=None, symbol='x')
+        self.daq_plot.setLabel('bottom', 'Frequency (GHz)')
+        self.daq_plot.setLabel('left', 'Voltage (V)')
 
         # ——— Current values display ———
         hl = QtWidgets.QHBoxLayout()
@@ -299,11 +311,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         # Put plot and console into a splitter for adjustable space
         live_splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
         live_splitter.addWidget(self.live_plot)
+        live_splitter.addWidget(self.daq_plot)
         live_splitter.addWidget(self.log_output)
         
         # give the plot a weight of 2 and the console 3
-        live_splitter.setStretchFactor(0, 2)
+        live_splitter.setStretchFactor(0, 3)
         live_splitter.setStretchFactor(1, 3)
+        live_splitter.setStretchFactor(2, 3)
         live_layout.addWidget(live_splitter)
 
         # Status Section
@@ -589,6 +603,9 @@ pulse_sequence:
         raw = bytes(self.process.readAll()).decode('utf-8', errors='ignore')
         self.log_output.appendPlainText(raw)
 
+        for vstr in re.findall(r"DAQ_VOLTAGE:\s*([0-9.+-eE]+)", raw):
+            self._daq_buffer.append(float(vstr))
+
         for line in raw.splitlines():
             m = re.search(r"\|\s*(\d+)/(\d+)\b", line)
             if m:
@@ -626,28 +643,46 @@ pulse_sequence:
             if count_m := re.search(r"Counts:\s*(\d+)", line):
                 self._last_count = int(count_m.group(1))
 
-            # 3) once we have both, plot and reset
+            # 3) once we have both, plot counts—and also collapse DAQ buffer into one voltage point
             if hasattr(self, '_last_freq') and hasattr(self, '_last_count'):
                 f = self._last_freq
                 c = self._last_count
 
-                # append and trim
+                # —— plot counts ——
                 self.live_freqs.append(f)
                 self.live_counts.append(c)
                 if len(self.live_freqs) > self.max_live_points:
                     self.live_freqs.pop(0)
                     self.live_counts.pop(0)
-
-                # update live curve
                 self.live_curve.setData(self.live_freqs, self.live_counts)
 
-                # update the little current-values label
+                # —— plot DAQ voltage ——
+                mean_v = None
+                if self._daq_buffer:
+                    mean_v = sum(self._daq_buffer) / len(self._daq_buffer)
+                else:
+                    # no raw samples this step?  default to NaN or 0
+                    mean_v = float('nan')
+
+                self.live_daq.append(mean_v)
+                # clear buffer for next step
+                self._daq_buffer.clear()
+
+                # keep voltages in sync
+                if len(self.live_daq) > len(self.live_freqs):
+                    self.live_daq = self.live_daq[-len(self.live_freqs):]
+                self.daq_curve.setData(self.live_freqs, self.live_daq)
+
+                # —— update labels ——
                 self.freq_label .setText(f"Frequency: {f:.3f} GHz")
                 self.count_label.setText(f"Counts: {c}")
 
                 # clear for next pair
                 del self._last_freq, self._last_count
 
+        # collect raw DAQ samples into our buffer for the next step
+        for vstr in re.findall(r"DAQ_VOLTAGE:\s*([0-9.+-eE]+)", raw):
+            self._daq_buffer.append(float(vstr))
 
     def _stop(self):
         if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
@@ -669,6 +704,8 @@ pulse_sequence:
         else:
             print("No running process to stop.")
 
+        stop_pulse_blaster()
+
         self.tabs.setCurrentIndex(1)
 
     def _on_finished(self):
@@ -680,6 +717,17 @@ pulse_sequence:
 
         self._show_results()
         self.tabs.setCurrentIndex(2)
+
+    def _read_daq_voltage_single(self):
+        """Read one sample from the DAQ."""
+        try:
+            # this will block until one sample is returned
+            val = self.daq_task.read()
+            return float(val)
+        except Exception as e:
+            # if something goes wrong, just propagate or log
+            print("DAQ read error:", e)
+            return 0.0
 
     def _on_view_data(self):
         # compute full summary and show in a dialog
@@ -753,7 +801,7 @@ pulse_sequence:
         arr_mean = self.data.mean(axis=tuple(range(2,self.data.ndim)))  # [ch, steps]
         freqs = np.linspace(cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
                             cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
-                            arr_mean.shape[1])
+                            arr_mean.shape[1]) / 1e9 # GHz
         self.proc_plot.clear()
         self.proc_plot.plot(freqs, arr_mean[0], pen='b', symbol='o')
         if cfg['data']['reference_channels']>1:
@@ -971,8 +1019,10 @@ pulse_sequence:
         self.freq_label .setText("Frequency: -- GHz")
         self.count_label.setText("Counts: --")
 
-        # Clear live plot
+        # Clear live plots
         self.live_curve.setData([], [])
+        self.live_daq.clear()    
+        self.daq_curve.setData([], [])
 
         # Clear terminal log
         self.log_output.clear()
@@ -1021,7 +1071,7 @@ class PowerSupplyDialog(QDialog):
             v0 = cfg.get(f"VSET{ch}", 0.0)
             i0 = cfg.get(f"ISET{ch}", 0.0)
             v_spin = QDoubleSpinBox(); v_spin.setSuffix(" V"); v_spin.setRange(0,30); v_spin.setValue(v0)
-            i_spin = QDoubleSpinBox(); i_spin.setSuffix(" A"); i_spin.setRange(0,5);  i_spin.setValue(i0)
+            i_spin = QDoubleSpinBox(); i_spin.setSuffix(" A"); i_spin.setDecimals(6); i_spin.setRange(1e-5, 50); i_spin.setSingleStep(1e-5);  i_spin.setValue(i0)
             v_act  = QLabel("-- V")
             i_act  = QLabel("-- A")
             start  = QPushButton(f"Start CH{ch}")
@@ -1115,6 +1165,6 @@ class PowerSupplyDialog(QDialog):
 if __name__ == '__main__':
     app = QtWidgets.QApplication(sys.argv)
     win = ODMRGui()
-    win.resize(900, 800)
+    win.resize(1000, 1100)
     win.show()
     sys.exit(app.exec())
