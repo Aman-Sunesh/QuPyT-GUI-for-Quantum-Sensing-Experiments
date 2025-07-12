@@ -59,7 +59,7 @@ pip install matplotlib nidaqmx numpy pulsestreamer pypylon pyserial pyvisa pyvis
 
 ---
 
-## 🚀 Launching the GUI
+## Launching the GUI
 
 ### Option 1: Terminal
 ```bash
