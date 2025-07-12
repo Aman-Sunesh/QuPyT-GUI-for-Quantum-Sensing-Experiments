@@ -1,3 +1,5 @@
+# stop_pb.py
+
 import spinapi
 
 BOARD = 0
