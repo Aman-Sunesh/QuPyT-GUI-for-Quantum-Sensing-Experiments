@@ -1,7 +1,8 @@
 """
-Generate a sample ODMR pulse sequence file.
-This pulse sequence is not suited to be used directly in a measurement.
-…adjust to your hardware…
+Auto-generated pulse sequence module for the QuPyt ODMR GUI.
+Such a file is created each time you press “Start” in the GUI to reflect
+your current settings (START, MW, LASER, READ pulses, loops, etc.).
+Do not edit manually—re-run from the GUI to regenerate.
 """
 
 import logging
