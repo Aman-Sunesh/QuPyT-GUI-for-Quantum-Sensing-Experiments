@@ -1,8 +1,8 @@
 # =============================================================================
-# Original Code Author: Karl Berggren (https://github.com/KarDB/QuPyt)
+# Original Code Author: Karl Briegel (https://github.com/KarDB/QuPyt)
 # File Modified By: Aman Sunesh
 # Purpose: This file is a modified version of the original QuPyt source code.
-#          Modifications were made to ensure compatibility with a custom GUI.
+#          Modifications were made to ensure compatibility with the GUI.
 #          All rights to the original code belong to the original author.
 # =============================================================================
 
