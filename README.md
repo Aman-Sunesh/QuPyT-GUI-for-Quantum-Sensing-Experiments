@@ -83,7 +83,7 @@ set PYTHONPATH=%CD%
 
 ---
 
-## 🛠Modified Core Files
+## Modified Core Files
 
 The GUI requires changes to three QuPyt source files:
 - `SequenceDesigner.py`
