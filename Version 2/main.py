@@ -1,3 +1,5 @@
+# main.py
+
 import sys
 import pathlib
 
@@ -5,7 +7,7 @@ sys.path.insert(0, str(pathlib.Path(__file__).parent))
 
 import logging
 from PyQt6.QtWidgets import QApplication, QMessageBox
-from odmr_gui import ODMRGui
+from GUI.odmr_gui import ODMRGui
 
 def main():
     try:
