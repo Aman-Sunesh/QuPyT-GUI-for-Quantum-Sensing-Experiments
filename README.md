@@ -12,9 +12,11 @@ QuPyt-GUI-for-Quantum-Sensing-Experiments/
 │   ├── SequenceDesigner.py                      # Updated for GUI-based sequence generation
 │   ├── sensors.py                               # Modified to interface with GUI sensor configuration
 │   └── yaml_sequence.py                         # Adapted to support dynamic YAML-based sequence creation
+
 ├── Version 1/                                   # Legacy scripts and standalone helpers (deprecated in v2)
 │   ├── user_pulse_seq.py                        # Hardcoded pulse sequence example (used in earlier prototypes)
 │   └── stop_pb.py                               # Script to stop PulseBlaster pulse generation manually
+
 ├── Version 2/                                   # Main GUI application source directory
 │   ├── __init__.py                              # Marks folder as a Python package
 │   ├── channels.py                              # Defines TTL channel labels and hardware mappings
@@ -28,9 +30,11 @@ QuPyt-GUI-for-Quantum-Sensing-Experiments/
 │   ├── power_supply.py                          # Korad KC3405 power supply control interface
 │   ├── stop_pb.py                               # Used internally to safely stop ongoing PB activity
 │   └── utils.py                                 # Utility functions (file I/O, formatting, YAML validators)
+
 ├── experiments/                                 # All experiment YAML descriptors (editable via GUI)
 │   ├── ODMR.yaml                                 # Descriptor for Optically Detected Magnetic Resonance scan
 │   └── XY8.yaml                                  # Descriptor for XY8 decoupling pulse sequence
+
 ├── QuPyt GUI User Manual.pdf                    # Comprehensive user manual detailing all GUI features
 ├── requirements.txt                             # List of required Python packages for setting up environment
 └── README.md                                    # Project overview, setup instructions, and launch guide
