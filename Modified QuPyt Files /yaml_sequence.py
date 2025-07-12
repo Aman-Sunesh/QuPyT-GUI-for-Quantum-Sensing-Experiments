@@ -1,3 +1,11 @@
+# =============================================================================
+# Original Code Author: Karl Briegel (https://github.com/KarDB/QuPyt)
+# File Modified By: Aman Sunesh
+# Purpose: This file is a modified version of the original QuPyt source code.
+#          Modifications were made to ensure compatibility with the GUI.
+#          All rights to the original code belong to the original author.
+# =============================================================================
+
 """
 Generation of yaml file based pulse sequences.
 """
