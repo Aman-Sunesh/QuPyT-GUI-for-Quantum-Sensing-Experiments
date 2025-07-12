@@ -1,0 +1,50 @@
+# Auto-generated ODMR experiment configuration by the QuPyt GUI upon pressing “Start”
+# Defines experiment_type, sensor, synchroniser, device settings, data parameters, and pulse_sequence
+# This file is overwritten on each run; adjust settings via the GUI rather than editing directly
+# Similar yaml files will be created for other experiments like XY8
+
+experiment_type: ODMR
+averages: 5
+sensor:
+  type: DAQ
+  config:
+    number_measurements: 20
+    apd_input: Dev1/ai0   # Change (if needed)
+synchroniser:
+  type: PulseBlaster
+  config: {}
+  channel_mapping:   # Change (if needed)
+    READ: 0   
+    START: 1
+    LASER: 2
+    MW: 3
+    I: 4
+    Q: 5
+dynamic_steps: 100
+dynamic_devices:
+  mw_source:
+    device_type: WindFreak
+    address: COM3   # Change (if needed)
+    config:
+      frequency:
+      - 2600000000.0
+      - 2900000000.0
+      amplitude:
+      - - channel_0
+        - - 25.0
+          - 25.0
+static_devices: {}
+data:
+  averaging_mode: spread
+  dynamic_steps: 100
+  compress: false
+  reference_channels: 1
+ps_path: C:\Users\jj\Desktop\QuPyt-master\user_pulse_seq.py   # Change path as per file location
+pulse_sequence:
+  mw_duration: 20.0
+  laserduration: 18.0
+  readout_time: 8.0
+  referenced_measurements: 20
+  max_framerate: 10000
+  tau: 2.0
+  blocks: 1
