@@ -79,7 +79,7 @@ set PYTHONPATH=%CD%
 
 ---
 
-## 🛠️ Modified Core Files
+## 🛠Modified Core Files
 
 The GUI requires changes to three QuPyt source files:
 - `SequenceDesigner.py`
@@ -90,7 +90,7 @@ Make sure to replace these with the versions found in the `Modified QuPyt Files/
 
 ---
 
-## 📖 Full Manual
+## Full Manual
 
 See `QuPyt_GUI_User_Manual.pdf` (included in the repository) for:
 - GUI component breakdown
@@ -101,7 +101,7 @@ See `QuPyt_GUI_User_Manual.pdf` (included in the repository) for:
 
 ---
 
-## 🔗 References
+## References
 
 - [QuPyt (Original)](https://github.com/KarDB/QuPyt/tree/master/source)
 - [QuPyt-GUI by Aman Sunesh](https://github.com/Aman-Sunesh/QuPyT-GUI-for-Quantum-Sensing-Experiments)
