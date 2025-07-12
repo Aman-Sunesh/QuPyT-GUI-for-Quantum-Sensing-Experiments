@@ -1,5 +1,6 @@
 # power_supply.py
 
+# Controls a Korad KC3405 Programmable DC Power Supply via PyVISA.
 import os, json, time
 from pathlib import Path
 import pyvisa
