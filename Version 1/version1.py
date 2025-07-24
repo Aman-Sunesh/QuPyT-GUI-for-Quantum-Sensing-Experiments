@@ -158,6 +158,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         form.addRow('Sweep stop:', self.stop_input)
         form.addRow('RF power:', self.power_input)
 
+        self.start_input.setRange(0, 1000)      # allow 0 – 1000 GHz
+        self.stop_input.setRange(0, 1000)       # allow 0 – 1000 GHz
+
         # Averaging & Acquisition
         self.avg_input = QtWidgets.QSpinBox()
         self.frames_input = QtWidgets.QSpinBox()
