@@ -68,6 +68,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         # for live-plot data
         self.live_freqs = []
         self.live_counts = []
+        self._daq_buffer = []
 
         # load all descriptors
         self.experiment_descs = load_experiments(self.experiments_dir)
@@ -306,9 +307,24 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # ——— Live ODMR Spectrum Plot ———
         self.live_plot = pg.PlotWidget()
-        self.live_curve = self.live_plot.plot([], [], pen=None, symbol='o')
+        self.live_curve = self.live_plot.plot(
+            [], [], 
+            pen=None,
+            symbol='o', 
+            symbolSize=6,
+            
+        )        
+
+        self.live_plot.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis)  # ensure y‑axis rescales to show small dips
         self.live_plot.setLabel('bottom', 'Frequency (GHz)')
         self.live_plot.setLabel('left', 'Counts')
+
+        # ——— Live DAQ Voltage Plot ———
+        self.live_daq = []
+        self.daq_plot = pg.PlotWidget(title="DAQ Voltage")
+        self.daq_curve = self.daq_plot.plot([], [], pen=None, symbol='x')
+        self.daq_plot.setLabel('bottom', 'Frequency (GHz)')
+        self.daq_plot.setLabel('left', 'Voltage (V)')
 
         # ——— Current values display ———
         hl = QtWidgets.QHBoxLayout()
@@ -360,6 +376,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         # Put plot and console into a splitter for adjustable space
         live_splitter = QSplitter(QtCore.Qt.Orientation.Vertical)
         live_splitter.addWidget(self.live_plot)
+        live_splitter.addWidget(self.daq_plot)
         live_splitter.addWidget(self.log_output)
         
         # give the plot a weight of 2 and the console 3
@@ -502,7 +519,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         # reset our live‐plot buffers
         self.live_freqs.clear()
         self.live_counts.clear()
+        self.live_daq.clear()
         self.live_curve.setData([], [])
+        self.daq_curve.setData([], [])
         self.last_freq = None
         self.last_count = None
 
@@ -655,7 +674,10 @@ class ODMRGui(QtWidgets.QMainWindow):
             return
 
         self.log_output.appendPlainText(raw)
-
+        # collect any DAQ voltages
+        for vstr in re.findall(r"DAQ_VOLTAGE:\s*([0-9.+-eE]+)", raw):
+            self._daq_buffer.append(float(vstr))\
+            
         for line in raw.splitlines():
             m = re.search(r"\|\s*(\d+)/(\d+)\b", line)
             if m:
@@ -706,7 +728,24 @@ class ODMRGui(QtWidgets.QMainWindow):
                     self.live_counts.pop(0)
 
                 # update live curve
-                self.live_curve.setData(self.live_freqs, self.live_counts)
+                self.live_curve.setData(self.live_freqs, self.live_counts, connect='finite')
+
+                # compute mean of buffered DAQ voltages this step
+                if self._daq_buffer:
+                    mean_v = sum(self._daq_buffer) / len(self._daq_buffer)
+                else:
+                    mean_v = float('nan')
+
+                self.live_daq.append(mean_v)
+
+                # clear buffer for next step
+                self._daq_buffer.clear()
+
+                # trim to match freq array
+                if len(self.live_daq) > len(self.live_freqs):
+                    self.live_daq = self.live_daq[-len(self.live_freqs):]
+                    
+                self.daq_curve.setData(self.live_freqs, self.live_daq)
 
                 # update the little current-values label
                 self.freq_label .setText(f"Frequency: {f:.3f} GHz")
@@ -1397,6 +1436,9 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Clear live plot
         self.live_curve.setData([], [])
+
+        # also clear the DAQ voltage plot
+        self.daq_curve.setData([], [])
 
         # Clear terminal log
         self.log_output.clear()
