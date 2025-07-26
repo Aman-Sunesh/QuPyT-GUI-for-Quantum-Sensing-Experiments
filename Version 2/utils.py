@@ -6,7 +6,6 @@
 # Gaussian) used throughout QuPyt for data fitting.
 # ────────────────────────────────────────────────────────────────
 
-
 import numpy as np
 
 def lorentzian(x, x0, gamma, A, y0):
