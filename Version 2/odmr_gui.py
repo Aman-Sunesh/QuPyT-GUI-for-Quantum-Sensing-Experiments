@@ -1,5 +1,19 @@
 # odmr_gui.py
 
+# ──────────────────────────────────────────────────────────────────────────────
+# Main GUI for configuring, running, and analyzing quantum sensing experiments.
+# Features:
+#  • Dynamic experiment selection & parameter UI based on YAML descriptors
+#  • Generation of pulse-sequence modules via Jinja
+#  • Rendering of experiment YAML for QuPyt backend
+#  • Real-time data acquisition & live plotting (ODMR & DAQ voltage)
+#  • Result visualization with auto-fit & parameter extraction
+#  • Experiment CRUD (add/edit/remove) via descriptor editor
+#  • Power-supply control dialog integration
+#
+# Key technologies: PyQt6, PyQtGraph, Jinja2, SCPI over VISA, YAML
+# ──────────────────────────────────────────────────────────────────────────────
+
 import sys
 import os
 import shutil
@@ -37,6 +51,7 @@ warnings = getattr(sys, 'warnoptions', None)
 # Global exception hook
 logging.basicConfig(level=logging.ERROR)
 
+# Show critical error dialog on uncaught exceptions
 def excepthook(exc_type, exc_value, exc_tb):
     QMessageBox.critical(None, "Unhandled Error", str(exc_value))
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
@@ -47,10 +62,20 @@ warnings = getattr(sys, 'warnoptions', None)
 
 from PyQt6.QtWidgets import QComboBox
 
+# Project paths
 PROJECT_ROOT   = Path(__file__).resolve().parents[1]
 LAST_CFG_PATH  = PROJECT_ROOT / '.qupyt' / 'last_config.json'
 
 class ODMRGui(QtWidgets.QMainWindow):
+    """
+    Main window for QuPyt ODMR GUI.
+
+    Tabs:
+      • Setup: experiment selection + parameter inputs + pulse preview
+      • Live: real-time plots and logs
+      • Results: summary, processed spectrum, fits
+      • Experiments: manage YAML descriptors
+    """
     def __init__(self):
         super().__init__()
         self.experiments_dir = Path.home() / 'Desktop' / 'QuPyt-master' / 'GUI' / 'experiments'
@@ -117,6 +142,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         # and redraw everything
         self._show_results()
 
+    # Create tabs, controls, and layouts.
     def _build_ui(self):
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -299,11 +325,6 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.clear_live_btn = QtWidgets.QPushButton("Clear Live")
         self.clear_live_btn.clicked.connect(self._clear_live)
         live_layout.addWidget(self.clear_live_btn)
-        
-        # # Clear waiting-room button
-        # self.clear_waiting_btn = QtWidgets.QPushButton("Clear waiting room")
-        # self.clear_waiting_btn.clicked.connect(self._clear_waiting_room)
-        # live_layout.addWidget(self.clear_waiting_btn)
 
         # ——— Live ODMR Spectrum Plot ———
         self.live_plot = pg.PlotWidget()
@@ -312,7 +333,6 @@ class ODMRGui(QtWidgets.QMainWindow):
             pen=None,
             symbol='o', 
             symbolSize=6,
-            
         )        
 
         self.live_plot.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis)  # ensure y‑axis rescales to show small dips
