@@ -1,5 +1,16 @@
 # experiment_editor.py
 
+# ────────────────────────────────────────────────────────────────
+# Provides a Qt dialog for creating or editing experiment descriptors.
+# Allows configuration of:
+#  • Experiment type & generator function
+#  • Parameter definitions (name, type, default, bounds, unit/choices)
+#  • Constants used in pulse expressions
+#  • Pulse sequence definitions (channel, timing, blocks)
+#  • Sequence ordering & repeats
+#  • CSV import/export and live pulse timing preview
+# ────────────────────────────────────────────────────────────────
+
 import csv
 import yaml
 import pyqtgraph as pg
@@ -25,16 +36,30 @@ from PyQt6.QtWidgets import (
 from channels import CHANNEL_MAPPING
 
 class ExperimentEditor(QtWidgets.QDialog):
+    """
+    Dialog for adding or editing an experiment descriptor YAML.
+    
+    Features:
+      - Define experiment_type and pulse_generator function
+      - Edit parameters (name, label, type, defaults, bounds, units/choices)
+      - Edit numeric constants for Jinja templating
+      - Define pulses with start/duration expressions and block labels
+      - Specify sequencing order and repeats
+      - Import/export descriptor to/from CSV
+      - Live preview of pulse timing diagram
+    """
     def __init__(self, parent=None, descriptor_path=None, experiments_dir=None):
         super().__init__(parent)
-        self.time_factor = 1.0
+        self.time_factor = 1.0 # scale factor for preview plotting
         self.resize(800, 900)
         self.setMinimumSize(800, 900)
+
+        # Dialog window setup
         self.setWindowTitle("Add Experiment" if descriptor_path is None else "Edit Experiment")
         self.experiments_dir = Path(experiments_dir)
         self.descriptor_path = Path(descriptor_path) if descriptor_path else None
 
-        # channel/lane + color mappings (copy-pasted from odmr_gui._init_pulse_diagram)
+        # Channel lane indices and colors for preview diagram
         self.channel_lanes = {
             'LASER':  0,
             'MW':     1,
@@ -43,6 +68,7 @@ class ExperimentEditor(QtWidgets.QDialog):
             'I':      4,
             'Q':      5,
         }
+        
         self.channel_colors = {
             'LASER': (255,  50,  50, 200),
             'MW':    (50,   50, 255, 200),
@@ -52,19 +78,18 @@ class ExperimentEditor(QtWidgets.QDialog):
             'Q':     (50,  255, 255, 200),
         }
 
-        # main layout
+        # Main vertical layout
         v = QtWidgets.QVBoxLayout(self)
         form = QFormLayout()
         v.addLayout(form)
 
-        # experiment_type
+        # Experiment type & generator function inputs
         self.le_name = QtWidgets.QLineEdit()
         form.addRow("Type:", self.le_name)
-        # pulse_generator
         self.le_gen = QtWidgets.QLineEdit()
         form.addRow("Generator func:", self.le_gen)
 
-        # parameters table
+        # ── parameters table ──
         self.tbl = QTableWidget(0, 7)
         self.tbl.setHorizontalHeaderLabels(
             ["name","label","type","default","min","max","unit/choices"]
@@ -98,6 +123,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         v.addWidget(QLabel("Constants:"))
         v.addWidget(self.const_tbl, 2)
 
+        # Buttons to add/remove constants
         hb3 = QHBoxLayout()
         btn_cadd = QPushButton("Add Constant")
         btn_crm  = QPushButton("Remove Constant")
@@ -106,7 +132,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         btn_cadd.clicked.connect(lambda: self._add_row(self.const_tbl))
         btn_crm .clicked.connect(lambda: self.const_tbl.removeRow(self.const_tbl.currentRow()))
 
-        # ── pulse‐sequence table
+        # ── pulse‐sequence table ──
         self.pulse_tbl = QTableWidget(0, 4)
         self.pulse_tbl.setHorizontalHeaderLabels(
             ["channel", "start-expr", "duration-expr", "blocks (comma-list)"]
@@ -124,12 +150,13 @@ class ExperimentEditor(QtWidgets.QDialog):
         v.addWidget(QLabel("Pulse Sequence:"))
         v.addWidget(self.pulse_tbl, 3)
 
+        # Sequencing order & repeats inputs
         self.le_seq_order   = QLineEdit()
         self.le_seq_repeats = QLineEdit()
         form.addRow("Sequence order:",   self.le_seq_order)
         form.addRow("Sequence repeats:", self.le_seq_repeats)
 
-        # add/remove pulse rows
+        # Buttons to add/remove pulse rows
         hb2 = QHBoxLayout()
         btn_padd = QPushButton("Add Pulse")
         btn_prm  = QPushButton("Remove Pulse")
@@ -138,7 +165,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         btn_padd.clicked.connect(lambda: self._add_row(self.pulse_tbl))
         btn_prm.clicked.connect(self._remove_pulse_row)
 
-        # add/remove parameter
+        # Buttons to add/remove parameter rows
         hb = QtWidgets.QHBoxLayout()
         btn_add = QtWidgets.QPushButton("Add Param")
         btn_rm  = QtWidgets.QPushButton("Remove Param")
@@ -161,6 +188,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         btn_load_csv.clicked.connect(self._load_from_csv)
         btn_template.clicked.connect(self._download_template)
 
+        # Dialog Save/Cancel buttons
         bb = QDialogButtonBox()
         bb.setStandardButtons(
             QDialogButtonBox.StandardButton.Save |
@@ -207,10 +235,12 @@ class ExperimentEditor(QtWidgets.QDialog):
         self._update_preview()
         self.preview_window.show()
 
+    # Ensure preview window closes when dialog is closed.
     def closeEvent(self, event):
         self.preview_window.close()
         super().closeEvent(event)
 
+    # Insert a new empty QLineEdit row into the given table.
     def _add_row(self, table: QTableWidget):
         r = table.rowCount()
         table.insertRow(r)
@@ -219,20 +249,24 @@ class ExperimentEditor(QtWidgets.QDialog):
             table.setCellWidget(r, c, le)
             le.textChanged.connect(self._update_preview)
 
+    # Add an empty row to the parameters table.
     def _add_param_row(self):
         r = self.tbl.rowCount()
         self.tbl.insertRow(r)
         for c in range(self.tbl.columnCount()):
             self.tbl.setCellWidget(r, c, QtWidgets.QLineEdit())
 
+    # Populate fields and tables from an existing YAML descriptor.
     def _load_descriptor(self):
         # force UTF-8 when reading
         with open(self.descriptor_path, 'r', encoding='utf-8') as f:
             d = yaml.safe_load(f)
 
+        # Experiment type & generator
         self.le_name.setText(d["experiment_type"])
         self.le_gen .setText(d.get("pulse_generator",""))
 
+        # Parameters
         for p in d.get("parameters",[]):
             r = self.tbl.rowCount(); self.tbl.insertRow(r)
             vals = [p["name"], p.get("label",""), p["type"],
@@ -242,6 +276,7 @@ class ExperimentEditor(QtWidgets.QDialog):
                 le = QtWidgets.QLineEdit(v)
                 self.tbl.setCellWidget(r,c,le)
 
+        # Pulses
         for p in d.get("pulses", []):
             r = self.pulse_tbl.rowCount(); self.pulse_tbl.insertRow(r)
             self.pulse_tbl.setCellWidget(r,0, QLineEdit(p.get("channel","")))
@@ -250,12 +285,13 @@ class ExperimentEditor(QtWidgets.QDialog):
             blocks = ",".join(p.get("blocks", []))
             self.pulse_tbl.setCellWidget(r,3, QLineEdit(blocks))
 
-        # ── load constants ──
+        # Constants
         for k, v in d.get("constants", {}).items():
             r = self.const_tbl.rowCount(); self.const_tbl.insertRow(r)
             self.const_tbl.setCellWidget(r, 0, QLineEdit(k))
             self.const_tbl.setCellWidget(r, 1, QLineEdit(str(v)))
 
+    # Handle Save: close preview and validate before accepting.
     def _on_save(self):
         # close the floating preview
         if hasattr(self, 'preview_window') and self.preview_window.isVisible():
@@ -263,6 +299,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         # validate & accept
         self._validate_and_accept()
 
+    # Handle Cancel: close preview and reject dialog.
     def _on_cancel(self):
         # close the floating preview
         if hasattr(self, 'preview_window') and self.preview_window.isVisible():
@@ -270,17 +307,24 @@ class ExperimentEditor(QtWidgets.QDialog):
         # reject this dialog
         super().reject()
 
+    # Validate mandatory fields and ensure descriptor name uniqueness.
     def _validate_and_accept(self):
         name = self.le_name.text().strip()
         if not name:
             QMessageBox.critical(self, "Error", "Experiment type is required"); return
         path = self.experiments_dir / f"{name}.yaml"
+
+        # Prevent overwrite when creating new
         if self.descriptor_path is None and path.exists():
             QMessageBox.critical(self, "Error", f"{name} already exists"); return
         self.descriptor_path = path
         super().accept()
 
     def save_descriptor(self):
+        """
+        Construct the descriptor dict from UI and write it to YAML.
+        Then refresh parent experiment list if applicable.
+        """
         desc = {
             "experiment_type": self.le_name.text().strip(),
             "pulse_generator": self.le_gen.text().strip(),
@@ -288,6 +332,8 @@ class ExperimentEditor(QtWidgets.QDialog):
             "pulses": [],          
             "sequence": {}         
         }
+        
+        # Collect parameters
         for r in range(self.tbl.rowCount()):
             cols = [ self.tbl.cellWidget(r,c).text().strip() for c in range(7) ]
             name,label,typ,default,minv,maxv,unitc = cols
@@ -302,7 +348,7 @@ class ExperimentEditor(QtWidgets.QDialog):
                 p["default"] = default
             desc["parameters"].append(p)
 
-        # ── collect all pulses ──
+        # Collect pulses
         for r in range(self.pulse_tbl.rowCount()):
             chan     = self.pulse_tbl.cellWidget(r,0).text().strip()
             start    = self.pulse_tbl.cellWidget(r,1).text().strip()
@@ -317,15 +363,16 @@ class ExperimentEditor(QtWidgets.QDialog):
                 entry["blocks"] = blocks
             desc["pulses"].append(entry)
 
-        # ── collect constants ──
         if self.const_tbl.rowCount():
             desc["constants"] = {}
+            
+            # Collect constants
             for r in range(self.const_tbl.rowCount()):
                 k = self.const_tbl.cellWidget(r, 0).text().strip()
                 v = self.const_tbl.cellWidget(r, 1).text().strip()
                 desc["constants"][k] = v
 
-        # ── optional sequence.order & repeats ──
+        # Sequence order & repeats (optional)
         order_txt   = self.le_seq_order.text().strip()
         repeats_txt = self.le_seq_repeats.text().strip()
         if order_txt:
@@ -345,10 +392,11 @@ class ExperimentEditor(QtWidgets.QDialog):
             if repeats_txt:
                 desc["sequence"]["repeats"] = [s.strip() for s in repeats_txt.split(",")]
 
-        # force UTF-8 when writing so that µ, π, etc. survive
+        # Write YAML descriptor
         with open(self.descriptor_path, 'w', encoding='utf-8') as f:
             yaml.safe_dump(desc, f, sort_keys=False)
 
+        # Refresh parent experiment factory if present
         parent = self.parent()
         if parent and hasattr(parent, '_reload_factory'):
             parent._reload_factory()
@@ -364,10 +412,14 @@ class ExperimentEditor(QtWidgets.QDialog):
             )
 
     def _build_context(self):
+        """
+        Build a Jinja context from parameter defaults and constants
+        for evaluating timing expressions.
+        """
         params = {}
         constants = {}
 
-        # ── collect parameters into `params` ──
+        # Gather parameter values
         for r in range(self.tbl.rowCount()):
             name = self.tbl.cellWidget(r, 0).text().strip()
             val  = self.tbl.cellWidget(r, 3).text().strip()
@@ -379,7 +431,7 @@ class ExperimentEditor(QtWidgets.QDialog):
                 except:
                     params[name] = val
 
-        # ── collect constants into `constants` ──
+        # Gather constants
         for r in range(self.const_tbl.rowCount()):
             name = self.const_tbl.cellWidget(r, 0).text().strip()
             val  = self.const_tbl.cellWidget(r, 1).text().strip()
@@ -399,6 +451,10 @@ class ExperimentEditor(QtWidgets.QDialog):
         return ctx
 
     def _update_preview(self):
+        """
+        Re-render the pulse timing diagram based on current tables.
+        Uses Jinja to evaluate start and duration expressions.
+        """
         self.preview.clear()
 
         # render each start/duration expression via Jinja
@@ -406,7 +462,7 @@ class ExperimentEditor(QtWidgets.QDialog):
         lanes  = CHANNEL_MAPPING
         pulses = []
 
-        # build a list of (channel, start, dur) from the table:
+        # Parse pulses table rows
         for r in range(self.pulse_tbl.rowCount()):
             chan       = self.pulse_tbl.cellWidget(r,0).text().strip()
             start_expr = self.pulse_tbl.cellWidget(r,1).text().strip()
@@ -422,7 +478,7 @@ class ExperimentEditor(QtWidgets.QDialog):
 
         total_time = max((s + d) for (_c, s, d) in pulses) if pulses else 1.0
 
-        # 1) draw baseline *only* in the gaps between pulses
+        # Draw baseline lines for each channel lane
         for chan, lane in self.channel_lanes.items():
             pen = pg.mkPen(self.channel_colors[chan], width=1)
             intervals = sorted((s, s + d) for (c, s, d) in pulses if c == chan)
@@ -443,7 +499,7 @@ class ExperimentEditor(QtWidgets.QDialog):
             if start0 < total_time:
                 self.preview.plot([start0, total_time], [lane, lane], pen=pen)
 
-        # 2) draw each pulse as a little box
+        # Draw each pulse as a rectangle
         pulse_h = 0.8
         for chan, start, dur in pulses:
             lane = self.channel_lanes[chan]
@@ -458,13 +514,14 @@ class ExperimentEditor(QtWidgets.QDialog):
             # falling edge
             self.preview.plot([x1, x1], [y1, y0], pen=pen)
 
-        # 3) relabel & rescale
+        # Configure axes ranges and ticks
         ticks = [(v, k) for k, v in self.channel_lanes.items()]
         self.preview.getAxis('left').setTicks([ticks])
         self.preview.setXRange(0, total_time * 1.05)
         max_lane = max(self.channel_lanes.values())
         self.preview.setYRange(-0.5, max_lane + 0.5)
 
+    # Remove the selected pulse row and refresh preview.
     def _remove_pulse_row(self):
         row = self.pulse_tbl.currentRow()
         if row >= 0:
@@ -473,6 +530,10 @@ class ExperimentEditor(QtWidgets.QDialog):
             self._update_preview()
 
     def _save_to_csv(self):
+        """
+        Export the current descriptor tables to CSV with sections:
+        PARAMETERS, CONSTANTS, PULSES.
+        """
         path, _ = QFileDialog.getSaveFileName(self, "Export Descriptor", "", "CSV (*.csv)")
         if not path:
             return
@@ -500,6 +561,10 @@ class ExperimentEditor(QtWidgets.QDialog):
         QMessageBox.information(self, "Saved", f"Descriptor exported to:\n{path}")
 
     def _load_from_csv(self):
+        """
+        Import a descriptor from CSV, populating parameter, constant,
+        and pulse tables. Then refresh preview.
+        """
         path, _ = QFileDialog.getOpenFileName(self, "Import Descriptor", "", "CSV (*.csv)")
         if not path:
             return
@@ -539,7 +604,10 @@ class ExperimentEditor(QtWidgets.QDialog):
         QMessageBox.information(self, "Loaded", f"Descriptor loaded from:\n{path}")
 
     def _download_template(self):
-        """Export a blank, fully‐commented CSV scaffold for new experiments."""
+        """
+        Export a CSV template scaffold for new experiment descriptors,
+        including commented examples.
+        """
         path, _ = QFileDialog.getSaveFileName(
             self, "Save CSV Template", "experiment_template.csv", "CSV (*.csv)"
         )
