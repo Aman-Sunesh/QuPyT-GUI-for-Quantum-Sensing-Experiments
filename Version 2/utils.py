@@ -1,5 +1,12 @@
 # utils.py
 
+# ────────────────────────────────────────────────────────────────
+# Utility functions for fitting Optically Detected Magnetic Resonance
+# (ODMR) spectra. Provides standard lineshape models (Lorentzian and
+# Gaussian) used throughout QuPyt for data fitting.
+# ────────────────────────────────────────────────────────────────
+
+
 import numpy as np
 
 def lorentzian(x, x0, gamma, A, y0):
