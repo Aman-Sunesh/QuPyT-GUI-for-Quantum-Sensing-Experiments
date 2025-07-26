@@ -1,18 +1,18 @@
-+# ────────────────────────────────────────────────────────────────
-+# QuPyt ODMR GUI
-+# 
-+# This script provides the main GUI for configuring, running, and 
-+# analyzing Optically Detected Magnetic Resonance (ODMR) experiments 
-+# using NV centers. It integrates:
-+#  • Experiment setup (frequency sweep, MW power, pulse timings)
-+#  • Real-time data acquisition (NI-DAQ, APD signals)
-+#  • Pulse sequence deployment (PulseBlaster synchronization)
-+#  • Power supply control via VISA
-+#  • Live plotting and result visualization
-+# 
-+# Key technologies: PyQt6, PyQtGraph, NI-DAQmx, spinapi (PulseBlaster)
-+# and external YAML-based experiment templates.
-+# ────────────────────────────────────────────────────────────────
+# ────────────────────────────────────────────────────────────────
+# QuPyt ODMR GUI
+# 
+# This script provides the main GUI for configuring, running, and 
+# analyzing Optically Detected Magnetic Resonance (ODMR) experiments 
+# using NV centers. It integrates:
+#  • Experiment setup (frequency sweep, MW power, pulse timings)
+#  • Real-time data acquisition (NI-DAQ, APD signals)
+#  • Pulse sequence deployment (PulseBlaster synchronization)
+#  • Power supply control via VISA
+#  • Live plotting and result visualization
+# 
+# Key technologies: PyQt6, PyQtGraph, NI-DAQmx, spinapi (PulseBlaster)
+# and external YAML-based experiment templates.
+# ────────────────────────────────────────────────────────────────
 
 
 import sys
