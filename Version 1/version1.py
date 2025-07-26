@@ -1,3 +1,20 @@
++# ────────────────────────────────────────────────────────────────
++# QuPyt ODMR GUI
++# 
++# This script provides the main GUI for configuring, running, and 
++# analyzing Optically Detected Magnetic Resonance (ODMR) experiments 
++# using NV centers. It integrates:
++#  • Experiment setup (frequency sweep, MW power, pulse timings)
++#  • Real-time data acquisition (NI-DAQ, APD signals)
++#  • Pulse sequence deployment (PulseBlaster synchronization)
++#  • Power supply control via VISA
++#  • Live plotting and result visualization
++# 
++# Key technologies: PyQt6, PyQtGraph, NI-DAQmx, spinapi (PulseBlaster)
++# and external YAML-based experiment templates.
++# ────────────────────────────────────────────────────────────────
+
+
 import sys
 import os
 import shutil
@@ -23,31 +40,60 @@ import nidaqmx
 from nidaqmx.constants import AcquisitionType
 from stop_pb import stop_pulse_blaster
 
+# Suppress warnings unless explicitly enabled
 warnings = getattr(sys, 'warnoptions', None)
 
+
+# ────────────────────────────────────────────────────────────────
+# Utility functions for curve fitting
+# These are used to fit Lorentzian or Gaussian functions to ODMR dips
+# ────────────────────────────────────────────────────────────────
 def lorentzian(x, x0, gamma, A, y0):
+    """Lorentzian line shape for fitting ODMR dips.
+    Args:
+        x: Frequency values (GHz)
+        x0: Center frequency
+        gamma: Half-width at half-maximum (HWHM)
+        A: Amplitude (negative for dip)
+        y0: Baseline offset
+    Returns:
+        Lorentzian curve evaluated at x
+    """
     return y0 + A * (gamma**2 / ((x - x0)**2 + gamma**2))
 
 def gaussian(x, mu, sigma, A, y0):
+    """Gaussian line shape for alternative dip fitting.
+    Args:
+        x: Frequency values
+        mu: Mean (center)
+        sigma: Standard deviation
+        A: Amplitude
+        y0: Baseline offset
+    Returns:
+        Gaussian curve evaluated at x
+    """
     return y0 + A * np.exp(-((x - mu)**2) / (2*sigma**2))
 
-# Predefined experiment presets
+
+# ────────────────────────────────────────────────────────────────
+# Predefined experiment presets for quick configuration
+# ────────────────────────────────────────────────────────────────
 PRESETS = {
-    'ODMR': {
-        'sweep_start': 2.80,
-        'sweep_stop': 2.95,
-        'power': 10,
+    'ODMR': {  # Basic ODMR experiment
+        'sweep_start': 2.80,  # GHz
+        'sweep_stop': 2.95,   # GHz
+        'power': 10,          # dBm
         'averages': 1,
         'frames': 20,
-        'dynamic_steps': 10,
+        'dynamic_steps': 10,  # frequency steps
         'mode': 'spread',
-        'ref_channels': 2,
-        'mw_duration': 20,
-        'read_time': 8,
-        'laserduration': 150,
-        'max_rate': 10000,
+        'ref_channels': 2,    # reference channel count
+        'mw_duration': 20,    # μs
+        'read_time': 8,       # μs
+        'laserduration': 150, # μs
+        'max_rate': 10000,    # Hz
     },
-    'XY8': {
+    'XY8': {   # Advanced pulse sequence for decoherence measurements
         'sweep_start': 0,
         'sweep_stop': 0,
         'power': 10,
@@ -64,28 +110,32 @@ PRESETS = {
     # Add more as needed
 }
 
+# Paths for saving configs
 LAST_CFG_PATH = Path.home() / '.qupyt' / 'last_config.json'
 PS_CFG_PATH = Path.home() / '.qupyt' / 'power_supply_config.json'
 
-
+# ────────────────────────────────────────────────────────────────
+# Main GUI Class
+# ────────────────────────────────────────────────────────────────
 class ODMRGui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
         self._suppress_auto_switch = False
         self.setWindowTitle('QuPyt Experiment GUI')
-        self.process = None
+        self.process = None  # Will hold QProcess for experiment runner
 
         # Power Supply settings button
         self.powersupply_btn = QtWidgets.QPushButton("Power Supply")
         self.powersupply_btn.clicked.connect(self._open_power_supply_dialog)
 
+        # Build GUI components
         self._build_ui()
 
-        # for live-plot data
-        self.live_freqs = []
-        self.live_counts = []
-        self.live_daq = []
-        self._daq_buffer = []
+        # Buffers for live plotting data
+        self.live_freqs = []   # X-axis for live ODMR plot
+        self.live_counts = []  # Counts from APD
+        self.live_daq = []     # Voltage readings from DAQ
+        self._daq_buffer = []  # Temporary buffer for DAQ averaging
 
         # load the default preset into all the widgets
         self._load_preset(self.exp_combo.currentText())
@@ -93,12 +143,14 @@ class ODMRGui(QtWidgets.QMainWindow):
         # now override with your last‐used JSON, if it exists
         self._restore_last_config()  
 
+        # Watch for new result files
         watcher = QtCore.QFileSystemWatcher([os.getcwd()], self)
         watcher.directoryChanged.connect(self._populate_file_selector)
         self._populate_file_selector() 
-        self.tabs.setCurrentIndex(0)
+        self.tabs.setCurrentIndex(0) # Default to Setup tab
 
-    
+
+    # Populate results dropdown with available .npy files
     def _populate_file_selector(self):
         files = sorted(glob.glob('ODMR_*.npy'), key=os.path.getmtime)
         self.file_selector.clear()
@@ -106,12 +158,14 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         if files:
             self.file_selector.setCurrentIndex(len(files)-1)
-
+          
+    # Update status when watcher process starts
     def _on_started(self):
         # called when QProcess starts
         self.status_led.setStyleSheet("background-color: green; border-radius: 8px;")
         self.status_label.setText("Running")
-    
+
+    # Load selected result file and show
     def _on_file_selected(self, filename: str):
         if self._suppress_auto_switch:
             self._suppress_auto_switch = False
@@ -120,14 +174,18 @@ class ODMRGui(QtWidgets.QMainWindow):
         if not filename:
             return
         try:
-            self.data = np.load(filename)
+            self.data = np.load(filename)   # Load experiment data
         except Exception as e:
             QMessageBox.warning(self, "Load error", f"Could not load {filename}:\n{e}")
             return
 
         # and redraw everything
-        self._show_results()
+        self._show_results()   
 
+  
+    # ────────────────────────────────────────────────────────────────
+    # Build GUI layout (Setup, Live, Results tabs)
+    # ────────────────────────────────────────────────────────────────
     def _build_ui(self):
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -246,12 +304,6 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.clear_live_btn.clicked.connect(self._clear_live)
         live_layout.addWidget(self.clear_live_btn)
 
-        
-        # # Clear waiting-room button
-        # self.clear_waiting_btn = QtWidgets.QPushButton("Clear waiting room")
-        # self.clear_waiting_btn.clicked.connect(self._clear_waiting_room)
-        # live_layout.addWidget(self.clear_waiting_btn)
-
         # ——— Live ODMR Spectrum Plot ———
         self.live_plot = pg.PlotWidget(title="ODMR Spectrum")
         self.live_curve = self.live_plot.plot([], [], pen=None, symbol='o')
@@ -291,17 +343,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         prog_box = QGroupBox("Progress")
         pb = QtWidgets.QVBoxLayout()
 
-        # 1) create the label, then style it
+        # create the label, then style it
         self.step_label = QLabel("Step 0/0")
         self.step_label.setStyleSheet("font-size: 14pt; font-weight: bold;")
 
-        # 2) now create the bars
+        # now create the bars
         self.sweep_bar  = QtWidgets.QProgressBar()
         self.sweep_bar.setFormat("Sweep %p%")
         self.count_gauge= QtWidgets.QProgressBar()
         self.count_gauge.setFormat("Counts: %v/%m")
 
-        # 3) add to layout
+        # add to layout
         pb.addWidget(self.step_label)
         pb.addWidget(self.sweep_bar)
         pb.addWidget(self.count_gauge)
@@ -401,20 +453,29 @@ class ODMRGui(QtWidgets.QMainWindow):
 
 
     def _start_watcher(self):
+        """Start the QuPyt backend watcher process that listens for new YAML files 
+        in the waiting_room directory and runs the corresponding experiment."""
+
+        # Block auto-switching of file selector while watcher is active
         self._suppress_auto_switch = True
 
+        # If an old watcher process is still running, kill it to avoid conflicts
         if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
             self.process.kill()
 
-        self.process = QtCore.QProcess(self)
-        self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)
-        self.process.started.connect(self._on_started)
-        self.process.readyReadStandardOutput.connect(self._on_stdout)
-        self.process.finished.connect(self._on_finished)
+        self.process = QtCore.QProcess(self)  # Create a new QProcess for running the QuPyt backend
+        self.process.setProcessChannelMode(QtCore.QProcess.ProcessChannelMode.MergedChannels)  # Merge stdout and stderr channels so logs show in one place
 
+        # Connect process signals to handlers for UI updates
+        self.process.started.connect(self._on_started)   # Set green LED + Running label
+        self.process.readyReadStandardOutput.connect(self._on_stdout)   # Parse logs for progress
+        self.process.finished.connect(self._on_finished)   # Switch to Results tab when done
+
+        # Build command: Python interpreter + QuPyt main module with verbose logging
         cmd  = sys.executable
         args = ['-u', '-m', 'qupyt.main', '--verbose']
 
+        # Set working directory to project root (assumes QuPyt installed on Desktop)
         project_root = Path.home() / 'Desktop' / 'QuPyt-master'
         self.process.setWorkingDirectory(str(project_root))
 
@@ -425,7 +486,10 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         self.max_live_points = max_steps
 
+        # Reset sweep progress bar
         self.sweep_bar.setValue(0)
+
+        # Start the QuPyt watcher process
         self.process.start(cmd, args)
 
         # reset our live‐plot buffers
@@ -439,10 +503,12 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.tabs.setCurrentIndex(1)
 
 
+    # Delete all files from the waiting_room directory (used for experiment YAML files).
     def _clear_waiting_room(self):
         """Delete every file in ~/.qupyt/waiting_room."""
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
 
+        # If directory does not exist, show info message
         if not wait_dir.exists():
             QMessageBox.information(self, "Nothing to clear", "Waiting room directory doesn’t exist.")
             return
@@ -455,33 +521,42 @@ class ODMRGui(QtWidgets.QMainWindow):
                 # skip any that can’t be removed
                 print(f"Couldn’t delete {f}: {e}")
 
+    # Deploy the generated ODMR.yaml into waiting_room so QuPyt watcher picks it up.
     def _deploy_yaml_and_run(self):
         desktop_yaml = Path.home() / 'Desktop' / 'ODMR.yaml'
+
+        # # Validate that the YAML file exists
         if not desktop_yaml.exists():
             QMessageBox.warning(self, "Missing YAML", f"Could not find {desktop_yaml}")
             return
 
-        # Drop it in once
+        # Ensure waiting_room exists
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
         wait_dir.mkdir(parents=True, exist_ok=True)
+
+        # First copy (to trigger event)
         target = wait_dir / 'ODMR.yaml'
         tmp = target.with_suffix('.tmp')
         shutil.copy(desktop_yaml, tmp)
         os.replace(tmp, target)
 
-        # Clear the waiting room (removes that first copy)
+        # Clear the waiting room immediately (simulate deletion + re-add for guaranteed event)
         self._clear_waiting_room()
 
-        # Drop it in again (second “new file” event)
+        # Second copy (actually starts the experiment)
         tmp2 = target.with_suffix('.tmp')
         shutil.copy(desktop_yaml, tmp2)
         os.replace(tmp2, target)
 
+        # Inform user
         QMessageBox.information(self, "Deployed", "ODMR.yaml deployed—starting run now.")
 
 
+    # Load predefined experiment settings into GUI fields (e.g., ODMR, XY8).
     def _load_preset(self, name: str):
         p = PRESETS[name]
+      
+        # Update all relevant UI fields with preset values
         self.start_input.setValue(p['sweep_start'])
         self.stop_input.setValue(p['sweep_stop'])
         self.power_input.setValue(p['power'])
@@ -603,13 +678,22 @@ pulse_sequence:
 
 
     def _on_stdout(self):
+        """Handle new output from the QuPyt watcher process.
+        Parses stdout for progress updates, frequency, counts, and DAQ voltage readings.
+        Updates the live plots and UI labels in real-time.
+        """
+
+        # Read all available output from the process (stdout and stderr merged)
         raw = bytes(self.process.readAll()).decode('utf-8', errors='ignore')
         self.log_output.appendPlainText(raw)
 
+        # Extract any DAQ voltage readings (printed as DAQ_VOLTAGE: <value>)
         for vstr in re.findall(r"DAQ_VOLTAGE:\s*([0-9.+-eE]+)", raw):
             self._daq_buffer.append(float(vstr))
 
+        # Process each line of output
         for line in raw.splitlines():
+            # Match pattern like: "| step/total" to update progress bars
             m = re.search(r"\|\s*(\d+)/(\d+)\b", line)
             if m:
                 step, total = map(int, m.groups())
@@ -638,15 +722,15 @@ pulse_sequence:
                 self.sweep_bar.setValue(int(p.group(1)))
 
             # ——— now the state‐machine for live plotting ———
-            # 1) catch any frequency line
+            # catch any frequency line
             if freq_m := re.search(r"frequency.*?([0-9]+(?:\.[0-9]+)?)", line):
                 self._last_freq = float(freq_m.group(1)) / 1e9
 
-            # 2) catch any count line
+            # catch any count line
             if count_m := re.search(r"Counts:\s*(\d+)", line):
                 self._last_count = int(count_m.group(1))
 
-            # 3) once we have both, plot counts—and also collapse DAQ buffer into one voltage point
+            # once we have both, plot counts—and also collapse DAQ buffer into one voltage point
             if hasattr(self, '_last_freq') and hasattr(self, '_last_count'):
                 f = self._last_freq
                 c = self._last_count
@@ -676,7 +760,7 @@ pulse_sequence:
                     self.live_daq = self.live_daq[-len(self.live_freqs):]
                 self.daq_curve.setData(self.live_freqs, self.live_daq)
 
-                # —— update labels ——
+                # update labels
                 self.freq_label .setText(f"Frequency: {f:.3f} GHz")
                 self.count_label.setText(f"Counts: {c}")
 
@@ -687,6 +771,7 @@ pulse_sequence:
         for vstr in re.findall(r"DAQ_VOLTAGE:\s*([0-9.+-eE]+)", raw):
             self._daq_buffer.append(float(vstr))
 
+    # Stop the QuPyt watcher process and PulseBlaster safely.
     def _stop(self):
         if self.process and self.process.state() == QtCore.QProcess.ProcessState.Running:
             # prevent on_finished() from auto‐switching to Results
@@ -695,9 +780,11 @@ pulse_sequence:
             except (TypeError, RuntimeError):
                 pass
 
+            # Attempt graceful termination
             self.process.terminate()
             self.process.waitForFinished(100)
 
+            # Force kill if still running
             if self.process.state() != QtCore.QProcess.ProcessState.NotRunning:
                 self.process.kill()
 
@@ -707,11 +794,16 @@ pulse_sequence:
         else:
             print("No running process to stop.")
 
+        # Stop PulseBlaster timing outputs to avoid MW/laser stuck ON
         stop_pulse_blaster()
 
         self.tabs.setCurrentIndex(1)
 
     def _on_finished(self):
+        """Called when QuPyt process finishes.
+        Refresh file selector, load latest results, and switch to Results tab.
+        """
+      
         # refresh the dropdown list…
         self._populate_file_selector()
         # …and if there’s at least one file, pick the newest
@@ -721,6 +813,7 @@ pulse_sequence:
         self._show_results()
         self.tabs.setCurrentIndex(2)
 
+    # Read a single DAQ voltage sample (blocking call).
     def _read_daq_voltage_single(self):
         """Read one sample from the DAQ."""
         try:
@@ -732,6 +825,7 @@ pulse_sequence:
             print("DAQ read error:", e)
             return 0.0
 
+    # Display detailed statistics of the currently loaded .npy dataset in a popup dialog.
     def _on_view_data(self):
         # compute full summary and show in a dialog
         data = getattr(self, "data", None)
@@ -762,9 +856,13 @@ pulse_sequence:
         dlg.setText(msg)
         dlg.exec()
 
+
+    # Load experiment metadata, plot averaged ODMR spectrum, fit resonance, and update UI.
     def _show_results(self):
-        # 1. Metadata (try waiting_room YAML, otherwise fall back to GUI values)
+        #   Get current timestamp
         ts = QtCore.QDateTime.currentDateTime().toString()
+
+        # Try to read YAML metadata from waiting_room
         yaml_path = Path.home() / '.qupyt' / 'waiting_room' / 'ODMR.yaml'
         if yaml_path.exists():
             with open(yaml_path,'r') as f:
@@ -777,7 +875,7 @@ pulse_sequence:
             )
 
         else:
-            # build a minimal cfg from the current GUI values
+            # Fallback: reconstruct metadata from GUI inputs
             freq_start = self.start_input.value() * 1e9
             freq_stop  = self.stop_input.value()  * 1e9
             steps      = self.dynamic_input.value()
@@ -798,20 +896,27 @@ pulse_sequence:
                 f"MW dur: {mw_dur} μs, Readout: {rd_dur} μs"
             )
 
+        # Display metadata
         self.meta_text.setPlainText(meta_str)
 
-        # 2. Processed Spectrum
+        # Compute averaged data across frames and channels
         arr_mean = self.data.mean(axis=tuple(range(2,self.data.ndim)))  # [ch, steps]
+
+        # Generate frequency axis in GHz
         freqs = np.linspace(cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
                             cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
                             arr_mean.shape[1]) / 1e9 # GHz
+
+        # # Plot primary channel
         self.proc_plot.clear()
         self.proc_plot.plot(freqs, arr_mean[0], pen='b', symbol='o')
+
+        # # If reference channel exists, plot normalized difference
         if cfg['data']['reference_channels']>1:
             diff = (arr_mean[0]-arr_mean[1])/(arr_mean[0]+arr_mean[1])
             self.proc_plot.plot(freqs, diff, pen='r', symbol='x')
 
-        # 3. Fit to chosen lineshape
+        # Fit to chosen lineshape
         y = arr_mean[0]
         x = freqs  # in Hz
 
@@ -867,28 +972,42 @@ pulse_sequence:
         self.summary_label.setText(summary)
 
 
+    # Export the most recent experiment data in .npy, .csv, or .png format.
     def _export(self):
+        # Find all .npy files in the current directory
         files = glob.glob('*.npy')
         if not files:
             QMessageBox.warning(self, 'Export', 'No .npy files found.')
             return
+
+        # Identify the latest .npy file by modification time
         latest = max(files, key=os.path.getmtime)
         data = np.load(latest)
+
+        # Ask user for destination file path and format
         path, _ = QFileDialog.getSaveFileName(self, 'Export data', '', 'NumPy (*.npy);;CSV (*.csv);;PNG (*.png)')
         if not path:
-            return
+            return # User canceled save dialog
+
+        # Export in the chosen format
         if path.endswith('.npy'):
-            np.save(path, data)
+            np.save(path, data) # Save raw NumPy data
+          
         elif path.endswith('.csv'):
+            # Compute mean across extra dimensions (averaging over frames)
             arr = data.mean(axis=tuple(range(2, data.ndim)))
+            # Save as comma-separated values
             np.savetxt(path, arr, delimiter=',')
-        else:
+        else:  # Export as PNG plot
+            # Average the data and compute frequency axis
             arr = data.mean(axis=tuple(range(2, data.ndim)))
             freqs = np.linspace(
                 self.start_input.value()*1e9,
                 self.stop_input.value()*1e9,
                 arr.shape[1]
             )
+
+            # Create plot with error bars (standard deviation as error)
             plt.figure()
             plt.errorbar(freqs, arr[0], yerr=arr[0].std(), fmt='o-')
             plt.xlabel('Frequency (Hz)')
@@ -896,8 +1015,11 @@ pulse_sequence:
             plt.tight_layout()
             plt.savefig(path)
             plt.close()
+          
         print(f"Exported data to {path}")
 
+
+    # Capture and save a snapshot of the given plot widget in PNG or SVG format.
     def _save_plot(self, widget):
         """Prompt for filename and save given widget (PNG or SVG)."""
         path, _ = QFileDialog.getSaveFileName(self, "Save Plot", "", "PNG (*.png);;SVG (*.svg)")
@@ -910,6 +1032,8 @@ pulse_sequence:
         path, _ = QFileDialog.getSaveFileName(self, "Save Configuration", "", "CSV (*.csv)")
         if not path:
             return
+
+        # Define configuration fields and corresponding values
         fields = [
             'sweep_start','sweep_stop','power',
             'averages','frames','dynamic_steps',
@@ -930,6 +1054,8 @@ pulse_sequence:
             self.las_dur.value(),
             self.rate.value(),
         ]
+
+        # Write values into CSV file
         with open(path, 'w', newline='') as f:
             writer = csv.writer(f)
             writer.writerow(fields)
@@ -971,7 +1097,8 @@ pulse_sequence:
             return 
         # on successful parse & apply, let the user know
         QMessageBox.information(self, "Loaded", f"Configuration loaded from:\n{path}")
-        
+
+    # Restore last used configuration from JSON snapshot (if available).
     def _restore_last_config(self):
         """Load last‐used JSON snapshot if present."""
         try:
@@ -997,6 +1124,8 @@ pulse_sequence:
             # silently skip if schema mismatch
             pass
 
+
+    # Save current GUI configuration into a JSON file for future restoration.
     def _write_last_config(self):
         """Dump current setup into a JSON file for ‘last used’ recall."""
         cfg = {
@@ -1017,6 +1146,8 @@ pulse_sequence:
         with open(LAST_CFG_PATH, 'w') as f:
             json.dump(cfg, f, indent=2)
 
+
+    # Reset live plotting UI and clear temporary experiment data.
     def _clear_live(self):
         # Reset frequency/count labels
         self.freq_label .setText("Frequency: -- GHz")
@@ -1047,30 +1178,42 @@ pulse_sequence:
         dlg.exec()
  
 class PowerSupplyDialog(QDialog):
+    """
+    Dialog window for controlling and monitoring a multi-channel power supply unit (PSU).
+    Provides options to set voltage/current for channels, start/stop output, and display actual readings.
+    """
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Power-Supply Settings")
 
+        # Form layout to organize input fields and buttons
         layout = QFormLayout(self)
+      
+        # Load previously saved PSU configuration if available
         try:
-            cfg = json.load(open(PS_CFG_PATH))
+            cfg = json.load(open(PS_CFG_PATH))   # Load saved voltage/current setpoints
         except:
-            cfg = {}
+            cfg = {}  # If no config exists, start with empty settings
 
+        # Initialize VISA resource manager for PSU communication
         rm = pyvisa.ResourceManager('@py')
         self.inst = rm.open_resource('ASRL4::INSTR')
         self.inst.write_termination = '\n'
         self.inst.read_termination  = '\n'
         self.inst.timeout = 2000
 
+        # Try querying PSU identification string to confirm connection
         try:
             idn = self.inst.query('*IDN?').strip()
             print(f"[PSU] IDN: {idn}")
         except Exception as e:
             QMessageBox.warning(self, "PSU Error", f"Could not query PSU IDN:\n{e}")
 
-        self.controls = {}
+        self.controls = {}  # Dictionary to store controls for each channel
+
+        # Create UI for 4 PSU channels
         for ch in (1,2,3,4):
+            # Load saved values or default to zero
             v0 = cfg.get(f"VSET{ch}", 0.0)
             i0 = cfg.get(f"ISET{ch}", 0.0)
             v_spin = QDoubleSpinBox(); v_spin.setSuffix(" V"); v_spin.setRange(0,30); v_spin.setValue(v0)
@@ -1092,25 +1235,30 @@ class PowerSupplyDialog(QDialog):
             row.addWidget(start)
             row.addWidget(stop)
             layout.addRow(row)
-
+          
             self.controls[ch] = {
                 "v_spin":v_spin, "i_spin":i_spin,
                 "v_act":v_act,   "i_act":i_act,
                 "start":start,   "stop":stop
             }
+
+            # Connect start/stop buttons to respective handlers
             start.clicked .connect(lambda _,c=ch: self._start_channel(c))
             stop.clicked  .connect(lambda _,c=ch: self._stop_channel(c))
 
+        # Buttons for saving configuration and closing dialog
         self.save_btn  = QPushButton("Save Settings")
         self.close_btn = QPushButton("Close")
         layout.addRow(self.save_btn, self.close_btn)
         self.save_btn.clicked .connect(self._save_settings)
         self.close_btn.clicked.connect(self.accept)
 
+        # Timer to periodically update actual voltage/current readings
         self.timer = QtCore.QTimer(self)
         self.timer.timeout.connect(self._update_actuals)
         self.timer.start(500)
 
+    # Start power supply output on the specified channel with the set voltage/current.
     def _start_channel(self, ch):
         vs   = self.controls[ch]["v_spin"].value()
         iset = self.controls[ch]["i_spin"].value()
@@ -1140,9 +1288,13 @@ class PowerSupplyDialog(QDialog):
         self.controls[ch]["v_act"].setText(f"{v_act} V")
         self.controls[ch]["i_act"].setText(f"{i_act} A")
 
+  
+    # Stop output on the specified channel.
     def _stop_channel(self, ch):
         self.inst.write(f"OUT{ch}:0")
 
+
+    # Periodically update actual voltage/current values for all channels.
     def _update_actuals(self):
         for ch,ctrl in self.controls.items():
             v = self.inst.query(f"VOUT{ch}?").strip()
@@ -1150,6 +1302,7 @@ class PowerSupplyDialog(QDialog):
             ctrl["v_act"].setText(f"{v} V")
             ctrl["i_act"].setText(f"{i} A")
 
+    # Save the current voltage/current setpoints to a JSON config file.
     def _save_settings(self):
         os.makedirs(PS_CFG_PATH.parent, exist_ok=True)
         data = {}
@@ -1161,6 +1314,11 @@ class PowerSupplyDialog(QDialog):
         QMessageBox.information(self, "Saved", "Power-supply settings saved.")
 
     def closeEvent(self, ev):
+        """
+        Clean up resources when dialog is closed:
+        - Stop the update timer
+        - Close PSU VISA connection
+        """
         self.timer.stop()
         self.inst.close()
         super().closeEvent(ev)
