@@ -1,5 +1,10 @@
 # experiment_yaml.py
 
+# ────────────────────────────────────────────────────────────────
+# Renders a complete ODMR experiment YAML file from a set of
+# GUI-supplied values. Writes atomically to avoid partial files.
+# ────────────────────────────────────────────────────────────────
+
 import os
 import yaml
 from pathlib import Path
@@ -7,23 +12,32 @@ from channels import CHANNEL_MAPPING
 
 def render_experiment_yaml(vals: dict, output_path: str):
     """
-    Build a YAML dict from vals and write it atomically to output_path.
-    Expects vals to contain at least the keys:
-      - experiment_type, averages, frames, apd_input,
-        MW, LASER, READ, START, n_dynamic_steps,
-        address, freq_start, freq_stop, power,
-        mode, ref_channels, ps_path,
-        mw_duration, laserduration, read_time, max_rate
-    Optionally: I_pulse, Q_pulse, tau, blocks.
+    Build an ODMR experiment configuration dict from GUI values
+    and atomically write it to the given YAML file path.
+
+    Args:
+        vals: Dictionary containing experiment parameters. Required keys:
+            - experiment_type, averages, frames, apd_input,
+            - MW, LASER, READ, START, n_dynamic_steps,
+            - address, freq_start, freq_stop, power,
+            - mode, ref_channels, ps_path,
+            - mw_duration, laserduration, read_time, max_rate
+          Optional keys:
+            - I_pulse, Q_pulse, I_channel, Q_channel, tau, blocks
+            - time_unit (ns, µs, ms)
+        output_path: Path object where YAML is written.
     """
-    # convert GUI times to µs
+    
+    # Determine time unit conversion factor (default µs)
     unit        = vals.get('time_unit', 'µs')
     unit_factor = {'ns': 1e-3, 'µs': 1.0, 'ms': 1e3}[unit]
+
+    # Convert pulse durations to chosen unit (µs)
     mw_dur    = vals['mw_duration']   * unit_factor
     laser_dur = vals['laserduration'] * unit_factor
     read_dur  = vals['read_time']     * unit_factor
 
-    # Base structure
+    # Base YAML structure
     cfg = {
         'experiment_type': vals['experiment_type'],
         'averages': vals['averages'],
@@ -67,15 +81,16 @@ def render_experiment_yaml(vals: dict, output_path: str):
         }
     }
 
-    # Inject the extra channels into the synchroniser mapping if they’re in vals
+    # Inject I/Q pulses if specified
     for chan in ('I', 'Q'):
         key = f'{chan}_pulse'
         if key in vals and vals[key] > 0:
+            # Map the channel number if provided
             idx_key = f'{chan}_channel'
             if idx_key in vals:
                 cfg['synchroniser']['channel_mapping'][chan] = vals[idx_key]
 
-            # also record duration in the pulse_sequence block
+            # Record pulse duration
             cfg['pulse_sequence'][f'{chan.lower()}_pulse_duration'] = vals[key] * unit_factor
 
     # And the other parameters (tau, blocks)
@@ -84,7 +99,7 @@ def render_experiment_yaml(vals: dict, output_path: str):
     if 'blocks' in vals:
         cfg['pulse_sequence']['blocks'] = vals['blocks']
 
-    # Write
+    # Atomically write the YAML to avoid partial files
     tmp = output_path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
         yaml.safe_dump(cfg, f, sort_keys=False)
