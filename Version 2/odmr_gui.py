@@ -78,7 +78,7 @@ class ODMRGui(QtWidgets.QMainWindow):
     """
     def __init__(self):
         super().__init__()
-        self.experiments_dir = Path.home() / 'Desktop' / 'QuPyt-master' / 'GUI' / 'experiments'
+        self.experiments_dir = Path(__file__).resolve().parent / 'experiments'
         self.experiment_descs = load_experiments(self.experiments_dir)
         self._suppress_auto_switch = False
         self.setWindowTitle('QuPyt Experiment GUI')
