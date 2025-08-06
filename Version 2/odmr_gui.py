@@ -813,13 +813,18 @@ class ODMRGui(QtWidgets.QMainWindow):
         dlg.exec()
 
     def _on_finished(self):
+        # re-enable file-selector signals (so manual changes now fire _on_file_selected)
+        self.file_selector.blockSignals(False)
         # refresh the dropdown list…
         self._populate_file_selector()
-        # …and if there’s at least one file, pick the newest
+
+        # if there’s at least one file, pick the newest
         if self.file_selector.count():
             self.file_selector.setCurrentIndex(self.file_selector.count() - 1)
 
+        # update the Results view immediately
         self._show_results()
+        # switch to the Results tab
         self.tabs.setCurrentIndex(2)
 
     def _on_view_data(self):
@@ -1474,3 +1479,4 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
+
