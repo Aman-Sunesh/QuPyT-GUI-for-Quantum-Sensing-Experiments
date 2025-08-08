@@ -19,3 +19,5 @@ harvesters
 jinja2
 scipy
 reportlab
+fastapi
+uvicorn
