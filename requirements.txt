@@ -18,3 +18,4 @@ harvester
 harvesters
 jinja2
 scipy
+reportlab
