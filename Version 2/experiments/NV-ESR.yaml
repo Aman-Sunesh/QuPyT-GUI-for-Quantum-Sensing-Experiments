@@ -1,0 +1,60 @@
+experiment_type: NV-ESR
+pulse_generator: ''
+parameters:
+- name: mw_duration
+  label: MW duration
+  type: float
+  default: 20.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xC2\xB5s"
+- name: read_time
+  label: Readout duration
+  type: float
+  default: 42.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xC2\xB5s"
+- name: laserduration
+  label: Laser duration
+  type: float
+  default: 50.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xC2\xB5s"
+- name: frames
+  label: Frames
+  type: int
+  default: 100
+  min: 1
+  max: 9999
+pulses:
+- channel: START
+  start: '0'
+  duration: '0.1'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '0'
+  duration: '21'
+  blocks:
+  - block_0
+- channel: LASER
+  start: '0'
+  duration: '43'
+  blocks:
+  - block_0
+- channel: READ
+  start: '18'
+  duration: '1'
+  blocks:
+  - block_0
+- channel: READ
+  start: '41'
+  duration: '1'
+  blocks:
+  - block_0
+constants:
+  buffer_between_pulses: '0.15'
+  cycle_gap: '0.5'
+  read_trigger_duration: '8'
