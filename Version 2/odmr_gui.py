@@ -51,7 +51,6 @@ warnings = getattr(sys, 'warnoptions', None)
 # Global exception hook
 logging.basicConfig(level=logging.ERROR)
 
-# Show critical error dialog on uncaught exceptions
 def excepthook(exc_type, exc_value, exc_tb):
     QMessageBox.critical(None, "Unhandled Error", str(exc_value))
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
@@ -62,23 +61,14 @@ warnings = getattr(sys, 'warnoptions', None)
 
 from PyQt6.QtWidgets import QComboBox
 
-# Project paths
 PROJECT_ROOT   = Path(__file__).resolve().parents[1]
 LAST_CFG_PATH  = PROJECT_ROOT / '.qupyt' / 'last_config.json'
 
 class ODMRGui(QtWidgets.QMainWindow):
-    """
-    Main window for QuPyt ODMR GUI.
-
-    Tabs:
-      • Setup: experiment selection + parameter inputs + pulse preview
-      • Live: real-time plots and logs
-      • Results: summary, processed spectrum, fits
-      • Experiments: manage YAML descriptors
-    """
     def __init__(self):
         super().__init__()
-        self.experiments_dir = Path(__file__).resolve().parent / 'experiments'
+        self.experiments_dir = Path.home() / 'Desktop' / 'QuPyt-master' / 'GUI' / 'experiments'
+        self.output_dir = Path.home() / 'Desktop' / 'QuPyt-master'
         self.experiment_descs = load_experiments(self.experiments_dir)
         self._suppress_auto_switch = False
         self.setWindowTitle('QuPyt Experiment GUI')
@@ -107,19 +97,24 @@ class ODMRGui(QtWidgets.QMainWindow):
         # now override with your last‐used JSON, if it exists
         self._restore_last_config()  
 
-        watcher = QtCore.QFileSystemWatcher([os.getcwd()], self)
+        watcher = QtCore.QFileSystemWatcher([str(self.output_dir)], self)
         watcher.directoryChanged.connect(self._populate_file_selector)
         self._populate_file_selector() 
         self.tabs.setCurrentIndex(0)
 
     
     def _populate_file_selector(self):
-        files = sorted(glob.glob('ODMR_*.npy'), key=os.path.getmtime)
+        exp = self.exp_combo.currentText()
+        pattern = f"{exp}_*.npy"
+        files = sorted(glob.glob(str(self.output_dir / pattern)), key=os.path.getmtime)        
         self.file_selector.clear()
         self.file_selector.addItems(files)
 
         if files:
-            self.file_selector.setCurrentIndex(len(files)-1)
+            idx = len(files) - 1
+            self.file_selector.setCurrentIndex(idx)
+            # and immediately display it in the Results tab
+            self._on_file_selected(files[idx])
 
     def _on_started(self):
         # called when QProcess starts
@@ -142,7 +137,6 @@ class ODMRGui(QtWidgets.QMainWindow):
         # and redraw everything
         self._show_results()
 
-    # Create tabs, controls, and layouts.
     def _build_ui(self):
         self.tabs = QtWidgets.QTabWidget()
         self.setCentralWidget(self.tabs)
@@ -198,9 +192,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.frames_input = QtWidgets.QSpinBox()
         self.param_widgets['frames'] = self.frames_input
         self.dynamic_input = QtWidgets.QSpinBox()
-        self.avg_input   .setRange(0, 9999)
-        self.frames_input.setRange(0, 9999)
-        self.dynamic_input.setRange(0, 9999)
+        self.avg_input   .setRange(0, 100000)
+        self.frames_input.setRange(0, 100000)
+        self.dynamic_input.setRange(0, 100000)
         
         self.mode_input = QtWidgets.QComboBox(); self.mode_input.addItems(['spread', 'sum'])
         self.refch_input = QtWidgets.QSpinBox()
@@ -279,6 +273,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.smooth_input = QtWidgets.QSpinBox()
         self.fit_input = QtWidgets.QComboBox(); self.fit_input.addItems(['Lorentzian', 'Gaussian'])
         self.errb_input = QtWidgets.QCheckBox('Show error bars')
+        self.sub_input.stateChanged.connect(self._clear_live)
         form.addRow(self.sub_input)
         form.addRow('Smoothing window:', self.smooth_input)
         form.addRow('Fit type:', self.fit_input)
@@ -333,6 +328,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             pen=None,
             symbol='o', 
             symbolSize=6,
+            
         )        
 
         self.live_plot.getViewBox().enableAutoRange(axis=pg.ViewBox.YAxis)  # ensure y‑axis rescales to show small dips
@@ -416,7 +412,15 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # ─── File-selector dropdown ───
         self.file_selector = QtWidgets.QComboBox()
-        self.file_selector.setToolTip("Select an ODMR .npy file to display")
+
+        # set initial tooltip
+        self.file_selector.setToolTip(f"Select a {self.exp_combo.currentText()} .npy file to display")
+
+        # whenever the experiment changes, update it
+        self.exp_combo.currentTextChanged.connect(
+            lambda txt: self.file_selector.setToolTip(f"Select a {txt} .npy file to display")
+        )
+
         self.file_selector.currentTextChanged.connect(self._on_file_selected)
 
         splitter = QSplitter(QtCore.Qt.Orientation.Vertical, res)
@@ -566,7 +570,8 @@ class ODMRGui(QtWidgets.QMainWindow):
                 print(f"Couldn’t delete {f}: {e}")
 
     def _deploy_yaml_and_run(self):
-        desktop_yaml = Path.home() / 'Desktop' / 'ODMR.yaml'
+        exp_name     = self.exp_combo.currentText()
+        desktop_yaml = Path.home() / 'Desktop' / f"{exp_name}.yaml"
 
         if not desktop_yaml.exists():
             QMessageBox.critical(self, "Deployment Error", f"Could not find {desktop_yaml}")
@@ -574,7 +579,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         wait_dir = Path.home() / '.qupyt' / 'waiting_room'
         wait_dir.mkdir(parents=True, exist_ok=True)
-        target = wait_dir / 'ODMR.yaml'
+        target = wait_dir / f"{exp_name}.yaml"
 
         # 1) initial atomic deploy
         tmp1 = target.with_suffix('.tmp')
@@ -735,44 +740,66 @@ class ODMRGui(QtWidgets.QMainWindow):
             if count_m := re.search(r"Counts:\s*(\d+)", line):
                 self._last_count = int(count_m.group(1))
 
-            # 3) once we have both, plot and reset
+            # 3) once we have both, collect two counts (on/off) then plot *once*
             if hasattr(self, '_last_freq') and hasattr(self, '_last_count'):
-                f = self._last_freq
-                c = self._last_count
-
-                # append and trim
-                self.live_freqs.append(f)
-                self.live_counts.append(c)
-                if len(self.live_freqs) > self.max_live_points:
-                    self.live_freqs.pop(0)
-                    self.live_counts.pop(0)
-
-                # update live curve
-                self.live_curve.setData(self.live_freqs, self.live_counts, connect='finite')
-
-                # compute mean of buffered DAQ voltages this step
-                if self._daq_buffer:
-                    mean_v = sum(self._daq_buffer) / len(self._daq_buffer)
+                # accumulate into a [on, off] pair
+                if not hasattr(self, '_pending_counts'):
+                    self._pending_counts = [self._last_count]
                 else:
-                    mean_v = float('nan')
+                    self._pending_counts.append(self._last_count)
 
-                self.live_daq.append(mean_v)
+                if len(self._pending_counts) == 2:
+                    on_count, off_count = self._pending_counts
+                    # raw or contrast?
+                    if self.sub_input.isChecked():
+                        # guard against off_count == 0
+                        if off_count == 0:
+                            cval = float('nan')
+                        else:
+                            cval = (on_count - off_count) / off_count
+                        self.count_label.setText(f"Contrast: {cval:.2f}")
+                    else:
+                        cval = on_count
+                        self.count_label.setText(f"Counts: {on_count}")
 
-                # clear buffer for next step
-                self._daq_buffer.clear()
+                    f = self._last_freq
 
-                # trim to match freq array
-                if len(self.live_daq) > len(self.live_freqs):
-                    self.live_daq = self.live_daq[-len(self.live_freqs):]
-                    
-                self.daq_curve.setData(self.live_freqs, self.live_daq)
+                    # append & trim
+                    self.live_freqs.append(f)
+                    self.live_counts.append(cval)
+                    if len(self.live_freqs) > self.max_live_points:
+                        self.live_freqs.pop(0)
+                        self.live_counts.pop(0)
 
-                # update the little current-values label
-                self.freq_label .setText(f"Frequency: {f:.3f} GHz")
-                self.count_label.setText(f"Counts: {c}")
+                    # redraw
+                    self.live_curve.setData(self.live_freqs, self.live_counts, connect='finite')
 
-                # clear for next pair
-                del self._last_freq, self._last_count
+                    # compute & append DAQ voltage (contrast if baseline subtraction is on)
+                    if self.sub_input.isChecked() and len(self._daq_buffer) >= 2:
+                        v_on, v_off = self._daq_buffer[0], self._daq_buffer[1]
+                        try:
+                            vval = (v_on - v_off) / v_off
+                        except ZeroDivisionError:
+                            vval = float('nan')
+                    else:
+                        # raw mean voltage
+                        vval = float('nan') if not self._daq_buffer else sum(self._daq_buffer) / len(self._daq_buffer)
+
+                    self.live_daq.append(vval)
+
+                    # clear for next cycle
+                    self._daq_buffer.clear()
+
+                    if len(self.live_daq) > len(self.live_freqs):
+                        self.live_daq = self.live_daq[-len(self.live_freqs):]
+                        
+                    self.daq_curve.setData(self.live_freqs, self.live_daq)
+
+                    # update the little current-values label (we already set count_label above)
+                    self.freq_label.setText(f"Frequency: {f:.3f} GHz")
+
+                    # clear for next frequency
+                    del self._pending_counts, self._last_freq, self._last_count
 
     def _stop(self):
         try:
@@ -860,7 +887,9 @@ class ODMRGui(QtWidgets.QMainWindow):
     def _show_results(self):
         # 1. Metadata (try waiting_room YAML, otherwise fall back to GUI values)
         ts = QtCore.QDateTime.currentDateTime().toString()
-        yaml_path = Path.home() / '.qupyt' / 'waiting_room' / 'ODMR.yaml'
+        exp_name  = self.exp_combo.currentText()
+        yaml_path = Path.home() / '.qupyt' / 'waiting_room' / f"{exp_name}.yaml"
+
         if yaml_path.exists():
             with open(yaml_path,'r') as f:
                 cfg = yaml.safe_load(f)
@@ -895,20 +924,37 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         self.meta_text.setPlainText(meta_str)
 
-        # 2. Processed Spectrum
-        arr_mean = self.data.mean(axis=tuple(range(2,self.data.ndim)))  # [ch, steps]
-        freqs = np.linspace(cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
-                            cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
-                            arr_mean.shape[1]) / 1e9  # GHz
-        self.proc_plot.clear() 
-        self.proc_plot.plot(freqs, arr_mean[0], pen='b', symbol='o')
-        if cfg['data']['reference_channels']>1:
-            diff = (arr_mean[0]-arr_mean[1])/(arr_mean[0]+arr_mean[1])
-            self.proc_plot.plot(freqs, diff, pen='r', symbol='x')
+        # 2. Processed Spectrum (MW-on / MW-off subtraction support)
+        freqs = np.linspace(
+            cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
+            cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
+            self.data.shape[1]
+        ) / 1e9
+        self.proc_plot.clear()
+
+        if self.sub_input.isChecked():
+            # preserve the readout dimension (reads=2) before averaging
+            arr_reads = self.data.mean(axis=tuple(range(3, self.data.ndim)))  # [ch, steps, reads]
+            on  = arr_reads[0, :, 0]
+            off = arr_reads[0, :, 1]
+
+            # element-wise guard against off == 0
+            with np.errstate(divide='ignore', invalid='ignore'):
+                contrast = np.where(off != 0, (on - off) / off, np.nan)
+
+            self.proc_plot.plot(freqs, contrast, pen='b', symbol='o')
+        else:
+            arr_mean = self.data.mean(axis=tuple(range(2, self.data.ndim)))  # [ch, steps]
+            self.proc_plot.plot(freqs, arr_mean[0], pen='b', symbol='o')
 
         # 3. Fit to chosen lineshape
-        y = arr_mean[0]
-        x = freqs  # in Hz
+        if self.sub_input.isChecked():
+            # we plotted the contrast
+            y = contrast
+        else:
+            # we plotted the raw mean counts
+            y = arr_mean[0]
+        x = freqs * 1e9  # in Hz 
 
         # choose model
         model = lorentzian if self.fit_input.currentText() == 'Lorentzian' else gaussian
@@ -1459,6 +1505,11 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.freq_label .setText("Frequency: -- GHz")
         self.count_label.setText("Counts: --")
 
+        # Clear our internal buffers so new points actually plot
+        self.live_freqs.clear()
+        self.live_counts.clear()
+        self.live_daq.clear()
+
         # Clear live plot
         self.live_curve.setData([], [])
 
@@ -1479,4 +1530,3 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
-
