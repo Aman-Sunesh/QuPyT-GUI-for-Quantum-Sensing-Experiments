@@ -4,21 +4,21 @@ parameters:
 - name: mw_duration
   label: MW duration
   type: float
-  default: 10.0
+  default: 20.0
   min: 0.0
   max: 1000.0
   unit: "\xC2\xB5s"
 - name: read_time
   label: Readout duration
   type: float
-  default: 50.0
+  default: 42.0
   min: 0.0
   max: 1000.0
   unit: "\xC2\xB5s"
 - name: laserduration
   label: Laser duration
   type: float
-  default: 100.0
+  default: 50.0
   min: 0.0
   max: 1000.0
   unit: "\xC2\xB5s"
@@ -31,35 +31,55 @@ parameters:
 pulses:
 - channel: START
   start: '0'
-  duration: '{{ 2*(constants.buffer_between_pulses*3 + mw_duration + laserduration
-    + constants.readout_and_repol_gap) }}'
+  duration: '0.1'
   blocks:
   - wait_loop
-- channel: MW
-  start: '{{ constants.buffer_between_pulses }}'
-  duration: '{{ mw_duration }}'
-  blocks:
-  - wait_loop
-  - block_0
 - channel: LASER
-  start: '{{ constants.buffer_between_pulses*2 + mw_duration }}'
+  start: '{{ 0.1 + constants.buffer_between_pulses}}'
   duration: '{{ read_time }}'
   blocks:
-  - wait_loop
+  - block_0
+- channel: MW
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses}}'
+  duration: '{{ mw_duration }}'
+  blocks:
   - block_0
 - channel: LASER
-  start: '{{ constants.buffer_between_pulses*2 + mw_duration + read_time + constants.readout_and_repol_gap
-    }}'
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2}}'
   duration: '{{ laserduration - read_time }}'
   blocks:
-  - wait_loop
   - block_0
 - channel: READ
-  start: '{{ constants.buffer_between_pulses + mw_duration }}'
-  duration: '{{ constants.read_trigger_duration }}'
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2}}'
+  duration: '{{ laserduration - read_time }}'
+  blocks:
+  - block_0
+- channel: LASER
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2 + laserduration - read_time
+    + constants.buffer_between_pulses * 3}}'
+  duration: '{{ read_time }}'
+  blocks:
+  - block_0
+- channel: LASER
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2 + laserduration - read_time
+    + constants.buffer_between_pulses * 3 + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2 }}'
+  duration: '{{ laserduration - read_time }}'
+  blocks:
+  - block_0
+- channel: READ
+  start: '{{ 0.1 + constants.buffer_between_pulses + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2 + laserduration - read_time
+    + constants.buffer_between_pulses * 3 + read_time + constants.buffer_between_pulses
+    + mw_duration + constants.buffer_between_pulses * 2}}'
+  duration: '{{ laserduration - read_time }}'
   blocks:
   - block_0
 constants:
-  buffer_between_pulses: '1'
-  readout_and_repol_gap: '2'
-  read_trigger_duration: '2'
+  buffer_between_pulses: '0.15'
+  readout_and_repol_gap: '2.1'
+  read_trigger_duration: '8'
