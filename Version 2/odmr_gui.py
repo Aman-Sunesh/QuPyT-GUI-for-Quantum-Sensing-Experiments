@@ -67,8 +67,8 @@ LAST_CFG_PATH  = PROJECT_ROOT / '.qupyt' / 'last_config.json'
 class ODMRGui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.experiments_dir = Path.home() / 'Desktop' / 'QuPyt-master' / 'GUI' / 'experiments'
-        self.output_dir = Path.home() / 'Desktop' / 'QuPyt-master'
+        self.experiments_dir = PROJECT_ROOT / 'GUI' / 'experiments'
+        self.output_dir      = PROJECT_ROOT
         self.experiment_descs = load_experiments(self.experiments_dir)
         self._suppress_auto_switch = False
         self.setWindowTitle('QuPyt Experiment GUI')
@@ -1530,3 +1530,4 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
+
