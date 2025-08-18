@@ -31,30 +31,30 @@ parameters:
 pulses:
 - channel: START
   start: '0'
-  duration: '0.1'
+  duration: '{{ constants.read_trigger_duration }}'
   blocks:
   - wait_loop
 - channel: MW
   start: '0'
-  duration: '21'
+  duration: '{{ mw_duration }}'
   blocks:
   - block_0
 - channel: LASER
   start: '0'
-  duration: '43'
+  duration: '{{ laserduration }}'
   blocks:
   - block_0
 - channel: READ
-  start: '18'
-  duration: '1'
+  start: '{{ constants.buffer_between_pulses + 0.7 * mw_duration }}'
+  duration: '{{ constants.read_trigger_duration }}'
   blocks:
   - block_0
 - channel: READ
-  start: '41'
-  duration: '1'
+  start: '{{ 0.8 * laserduration }}'
+  duration: '{{ constants.read_trigger_duration }}'
   blocks:
   - block_0
 constants:
-  buffer_between_pulses: '0.15'
+  buffer_between_pulses: '1'
   cycle_gap: '0.5'
-  read_trigger_duration: '8'
+  read_trigger_duration: '2'
