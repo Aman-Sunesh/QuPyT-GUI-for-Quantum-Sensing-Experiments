@@ -179,8 +179,8 @@ class ODMRGui(QtWidgets.QMainWindow):
         form.addRow('Time unit:', self.unit_combo)
 
         # Sweep & Power
-        self.start_input = QtWidgets.QDoubleSpinBox(); self.start_input.setSuffix(' GHz')
-        self.stop_input = QtWidgets.QDoubleSpinBox();  self.stop_input.setSuffix(' GHz')
+        self.start_input = QtWidgets.QDoubleSpinBox(); self.start_input.setSuffix(' GHz'); self.start_input.setSingleStep(0.1)
+        self.stop_input  = QtWidgets.QDoubleSpinBox(); self.stop_input .setSuffix(' GHz'); self.stop_input .setSingleStep(0.1)
         self.steps_input = QtWidgets.QSpinBox()
         self.power_input = QtWidgets.QDoubleSpinBox(); self.power_input.setSuffix(' dBm')
         form.addRow('Sweep start:', self.start_input)
@@ -1530,4 +1530,5 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
+
 
