@@ -130,6 +130,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             return
         try:
             self.data = np.load(filename)
+            self.current_file = Path(filename)
         except Exception as e:
             QMessageBox.warning(self, "Load error", f"Could not load {filename}:\n{e}")
             return
@@ -849,8 +850,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         if self.file_selector.count():
             self.file_selector.setCurrentIndex(self.file_selector.count() - 1)
 
-        # update the Results view immediately
-        self._show_results()
+        # update the Results view immediately (if a file actually loaded)
+        try:
+            self._show_results()
+        except AttributeError:
+            # No data yet; leave Results blank
+            pass
+      
         # switch to the Results tab
         self.tabs.setCurrentIndex(2)
 
@@ -885,6 +891,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         dlg.exec()
 
     def _show_results(self):
+        # Bail out gracefully if no data yet
+        if not hasattr(self, "data") or self.data is None:
+            self.meta_text.setPlainText(
+                "No data loaded yet. Run an experiment or select a file to see results."
+            )
+            self.proc_plot.clear()
+            for r in range(self.fit_table.rowCount()):
+                self.fit_table.setItem(r, 1, QTableWidgetItem("—"))
+            self.summary_label.setText("No data loaded")
+            return
+
         # 1. Metadata (try waiting_room YAML, otherwise fall back to GUI values)
         ts = QtCore.QDateTime.currentDateTime().toString()
         exp_name  = self.exp_combo.currentText()
@@ -925,11 +942,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.meta_text.setPlainText(meta_str)
 
         # 2. Processed Spectrum (MW-on / MW-off subtraction support)
-        freqs = np.linspace(
-            cfg['dynamic_devices']['mw_source']['config']['frequency'][0],
-            cfg['dynamic_devices']['mw_source']['config']['frequency'][1],
-            self.data.shape[1]
-        ) / 1e9
+        try:
+            f0, f1 = cfg['dynamic_devices']['mw_source']['config']['frequency']
+        except Exception:
+            # Fallback to GUI sweep if YAML has a scalar or missing field
+            f0 = self.start_input.value() * 1e9
+            f1 = self.stop_input.value()  * 1e9
+        freqs = np.linspace(f0, f1, self.data.shape[1]) / 1e9
         self.proc_plot.clear()
 
         if self.sub_input.isChecked():
@@ -1530,5 +1549,6 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
+
 
 
