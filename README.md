@@ -2,7 +2,7 @@
 
 This repository contains a graphical user interface for running quantum sensing experiments using the QuPyt framework. It is designed to streamline the experimental workflow by eliminating repetitive terminal commands and providing visual tools for experiment setup, execution, and data visualization.
 
---- 
+---
 
 ## Repository Structure
 
