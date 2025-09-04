@@ -10,8 +10,8 @@ import yaml
 from pathlib import Path
 from channels import CHANNEL_MAPPING
 from yaml.dumper import SafeDumper
-from yaml.nodes import ScalarNode
 from yaml.representer import SafeRepresenter
+import re
 
 
 # force flow-style sequences like [a, b] 
@@ -21,7 +21,11 @@ class FlowSeq(list):
 def _flow_seq_representer(dumper, data):
     return dumper.represent_sequence('tag:yaml.org,2002:seq', data, flow_style=True)
 
-yaml.add_representer(FlowSeq, _flow_seq_representer, Dumper=SafeDumper)
+class FlowDumper(SafeDumper):
+    """Custom dumper to keep floats plain (no !!float) and FlowSeq in flow style."""
+    pass
+
+yaml.add_representer(FlowSeq, _flow_seq_representer, Dumper=FlowDumper)
 
 class QuotedStr(str):
     """Render this string in quotes in YAML."""
@@ -30,33 +34,37 @@ class QuotedStr(str):
 def _quotedstr_representer(dumper, data):
     return dumper.represent_scalar('tag:yaml.org,2002:str', data, style="'")
 
-yaml.add_representer(QuotedStr, _quotedstr_representer, Dumper=SafeDumper)
+yaml.add_representer(QuotedStr, _quotedstr_representer, Dumper=FlowDumper)
 
 
 _default_float_repr = SafeRepresenter.represent_float
 
 def _float_representer(dumper, value: float):
-    # Use compact scientific for large magnitudes; otherwise default.
+    """
+    Emit large magnitudes in compact scientific notation like '2.0e9'
+    as a *plain* scalar so no quotes or !!float tag are added.
+    """
     if abs(value) >= 1e6:
         sig = 3  # mantissa significant digits
-        s = f"{float(value):.{sig}e}"       # e.g., '2.820e+09'
+        s = f"{float(value):.{sig}e}"      # e.g., '2.820e+09'
         mant, exp = s.split('e')
         mant = mant.rstrip('0').rstrip('.') or '0'
-
         if '.' not in mant:
-            mant += '.0'                    # '2.0' style
-        exp = str(int(exp))                 # drop '+' and leading zeros
-        txt = f"{mant}e{exp}"               # e.g., '2.82e9'
-
-        # Return a PLAIN scalar with implicit type so no !!float tag appears
-        node = ScalarNode('tag:yaml.org,2002:float', txt, style=None)
-        node.implicit = (True, True)
-
-        return node
-    
+            mant += '.0'                   # ensure '2.0' style
+        exp = str(int(exp))                # drop '+' and leading zeros
+        txt = f"{mant}e{exp}"              # e.g., '2.82e9'
+        return dumper.represent_scalar('tag:yaml.org,2002:float', txt)
     return _default_float_repr(dumper, value)
 
-yaml.add_representer(float, _float_representer, Dumper=SafeDumper)
+# Use our float representer on the custom dumper
+yaml.add_representer(float, _float_representer, Dumper=FlowDumper)
+
+# Ensure plain scalars like 2.82e9 are recognized as floats (so no explicit !!float)
+FlowDumper.add_implicit_resolver(
+    'tag:yaml.org,2002:float',
+    re.compile(r'^[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?$'),
+    list('-+0123456789.')
+)
 
 def render_experiment_yaml(vals: dict, output_path: str):
     """
@@ -85,6 +93,16 @@ def render_experiment_yaml(vals: dict, output_path: str):
     if mode not in ('spread', 'sum', 'interleaved'):
         mode = 'spread'
 
+    # choose RF port token based on device type:
+    # - WindFreak (Official):  use 'channel_0' / 'channel_1'
+    # - WindFreakSHDMini:      use 0 / 1 (ints)
+    mw_device_type = vals.get('mw_device_type', 'WindFreakSHDMini')
+    mw_out = str(vals.get('mw_output', 'A')).strip()
+    if mw_device_type == 'WindFreak':
+        ch_token = QuotedStr('channel_1') if mw_out in ('B','1','channel_1') else QuotedStr('channel_0')
+    else:
+        ch_token = 1 if mw_out in ('B','1','channel_1') else 0
+
     # amplitude shape: allow constant, [start, stop], or per-channel dict
     power = vals.get('power')
     amp_cfg = []
@@ -95,17 +113,25 @@ def render_experiment_yaml(vals: dict, output_path: str):
                 start, stop = float(rng[0]), float(rng[1])
             else:
                 start = stop = float(rng)
-            # each amplitude row as a flow-seq: ['channel_x', [start, stop]]
-            amp_cfg.append(FlowSeq([QuotedStr(str(ch)), FlowSeq([start, stop])]))
+            # honor explicit per-channel dict as-is (assume caller matched device type)
+            if mw_device_type == 'WindFreak':
+                key = QuotedStr(str(ch))
+            else:
+                # accept 0/1 (int), or "0"/"1" (str). Leave other types as-is.
+                if isinstance(ch, int):
+                    key = ch
+                elif isinstance(ch, str) and ch.isdigit():
+                    key = int(ch)
+                else:
+                    key = ch
+            amp_cfg.append(FlowSeq([key, FlowSeq([start, stop])]))
 
     elif isinstance(power, (list, tuple)) and len(power) == 2:
-        amp_cfg.append(FlowSeq([QuotedStr('channel_0'), FlowSeq([float(power[0]), float(power[1])])]))
+        amp_cfg.append(FlowSeq([ch_token, FlowSeq([float(power[0]), float(power[1])])]))
     
     else:
         amp = float(power)
-        amp_cfg.append(FlowSeq([QuotedStr('channel_0'), FlowSeq([amp, amp])]))
-
-    mw_device_type = vals.get('mw_device_type', 'WindFreakSHDMini')
+        amp_cfg.append(FlowSeq([ch_token, FlowSeq([amp, amp])]))
 
     # quick sanity checks (fail fast if misconfigured)
     assert freq_stop >= freq_start, "freq_stop must be ≥ freq_start"
@@ -135,7 +161,15 @@ def render_experiment_yaml(vals: dict, output_path: str):
                 'address': vals['address'],
                 'config': {
                     'amplitude': amp_cfg,
-                    'frequency': FlowSeq([freq_start, freq_stop]),
+                    # include channel with frequency range for WindFreak Official,
+                    # otherwise plain ints for SHDMini
+                    'frequency': (
+                        FlowSeq([QuotedStr('channel_1' if mw_out in ('B','1','channel_1') else 'channel_0'),
+                                 FlowSeq([freq_start, freq_stop])])
+                        if mw_device_type == 'WindFreak'
+                        else FlowSeq([ (1 if mw_out in ('B','1','channel_1') else 0),
+                                       FlowSeq([freq_start, freq_stop])])
+                    ),
                 }
             }
         },
@@ -176,5 +210,5 @@ def render_experiment_yaml(vals: dict, output_path: str):
     # Write
     tmp = output_path.with_suffix('.tmp')
     with open(tmp, 'w', encoding='utf-8') as f:
-        yaml.safe_dump(cfg, f, sort_keys=False)  # SafeDumper is used by safe_dump
+        yaml.dump(cfg, f, Dumper=FlowDumper, sort_keys=False)  
     os.replace(tmp, output_path)
