@@ -95,13 +95,13 @@ def render_experiment_yaml(vals: dict, output_path: str):
 
     # choose RF port token based on device type:
     # - WindFreak (Official):  use 'channel_0' / 'channel_1'
-    # - WindFreakSHDMini:      use 0 / 1 (ints)
+    # - WindFreakSHDMini:      use '0' / '1' 
     mw_device_type = vals.get('mw_device_type', 'WindFreakSHDMini')
     mw_out = str(vals.get('mw_output', 'A')).strip()
     if mw_device_type == 'WindFreak':
         ch_token = QuotedStr('channel_1') if mw_out in ('B','1','channel_1') else QuotedStr('channel_0')
     else:
-        ch_token = 1 if mw_out in ('B','1','channel_1') else 0
+        ch_token = QuotedStr('1') if mw_out in ('B','1','channel_1') else QuotedStr('0')
 
     # amplitude shape: allow constant, [start, stop], or per-channel dict
     power = vals.get('power')
@@ -113,25 +113,17 @@ def render_experiment_yaml(vals: dict, output_path: str):
                 start, stop = float(rng[0]), float(rng[1])
             else:
                 start = stop = float(rng)
-            # honor explicit per-channel dict as-is (assume caller matched device type)
-            if mw_device_type == 'WindFreak':
-                key = QuotedStr(str(ch))
-            else:
-                # accept 0/1 (int), or "0"/"1" (str). Leave other types as-is.
-                if isinstance(ch, int):
-                    key = ch
-                elif isinstance(ch, str) and ch.isdigit():
-                    key = int(ch)
-                else:
-                    key = ch
+            # force channel key to string for both drivers
+            key = QuotedStr(str(ch))
             amp_cfg.append(FlowSeq([key, FlowSeq([start, stop])]))
 
     elif isinstance(power, (list, tuple)) and len(power) == 2:
-        amp_cfg.append(FlowSeq([ch_token, FlowSeq([float(power[0]), float(power[1])])]))
+        amp_cfg.append(FlowSeq([QuotedStr(str(ch_token)), 
+                            FlowSeq([float(power[0]), float(power[1])])]))
     
     else:
         amp = float(power)
-        amp_cfg.append(FlowSeq([ch_token, FlowSeq([amp, amp])]))
+        amp_cfg.append(FlowSeq([QuotedStr(str(ch_token)), FlowSeq([amp, amp])]))
 
     # quick sanity checks (fail fast if misconfigured)
     assert freq_stop >= freq_start, "freq_stop must be ≥ freq_start"
@@ -161,15 +153,12 @@ def render_experiment_yaml(vals: dict, output_path: str):
                 'address': vals['address'],
                 'config': {
                     'amplitude': amp_cfg,
-                    # include channel with frequency range for WindFreak Official,
-                    # otherwise plain ints for SHDMini
-                    'frequency': (
-                        FlowSeq([QuotedStr('channel_1' if mw_out in ('B','1','channel_1') else 'channel_0'),
-                                 FlowSeq([freq_start, freq_stop])])
-                        if mw_device_type == 'WindFreak'
-                        else FlowSeq([ (1 if mw_out in ('B','1','channel_1') else 0),
-                                       FlowSeq([freq_start, freq_stop])])
-                    ),
+                    # include channel with frequency range for WindFreak Official, and WindFreakSHDMini
+                    'frequency': FlowSeq([ (QuotedStr('channel_1') if mw_device_type == 'WindFreak' and mw_out in ('B','1','channel_1')
+                                             else QuotedStr('channel_0') if mw_device_type == 'WindFreak'
+                                             else QuotedStr('1') if mw_out in ('B','1','channel_1')
+                                             else QuotedStr('0')),
+                                           FlowSeq([float(freq_start), float(freq_stop)]) ]),
                 }
             }
         },
