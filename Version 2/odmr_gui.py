@@ -33,9 +33,10 @@ from pathlib import Path
 from jinja2 import Template
 from scipy.optimize import curve_fit
 from PyQt6 import QtWidgets, QtCore
+from PyQt6.QtCore import Qt
 from PyQt6.QtWidgets import (QFileDialog, QPlainTextEdit, QMessageBox, QTableWidget, QTableWidgetItem, 
                              QTextEdit, QSplitter, QLabel, QGroupBox, QVBoxLayout, QFormLayout,
-                             QSpinBox, QDoubleSpinBox)
+                             QSpinBox, QDoubleSpinBox, QScrollArea)
 
 from utils import lorentzian, gaussian
 from GUI.experiment_yaml import render_experiment_yaml
@@ -46,18 +47,26 @@ from generic_generator import generate_from_descriptor
 from stop_pb import stop_pulse_blaster
 from GUI.power_supply import PowerSupplyDialog
 
-warnings = getattr(sys, 'warnoptions', None)
+_warnoptions = getattr(sys, 'warnoptions', None)
 
 # Global exception hook
 logging.basicConfig(level=logging.ERROR)
 
 def excepthook(exc_type, exc_value, exc_tb):
-    QMessageBox.critical(None, "Unhandled Error", str(exc_value))
+    # if no QApplication yet (import-time crash), delegate to default handler.
     logging.error("Uncaught exception", exc_info=(exc_type, exc_value, exc_tb))
+    app = QtWidgets.QApplication.instance()
+    if app is None:
+        # No GUI context yet — don't create widgets here
+        sys.__excepthook__(exc_type, exc_value, exc_tb)
+        return
+    try:
+        QMessageBox.critical(None, "Unhandled Error", str(exc_value))
+    except Exception:
+        # Last resort: never crash the excepthook itself
+        pass
 
-sys.excepthook = excepthook
-
-warnings = getattr(sys, 'warnoptions', None)
+_warnoptions = getattr(sys, 'warnoptions', None)
 
 from PyQt6.QtWidgets import QComboBox
 
@@ -67,8 +76,8 @@ LAST_CFG_PATH  = PROJECT_ROOT / '.qupyt' / 'last_config.json'
 class ODMRGui(QtWidgets.QMainWindow):
     def __init__(self):
         super().__init__()
-        self.experiments_dir = PROJECT_ROOT / 'GUI' / 'experiments'
-        self.output_dir      = PROJECT_ROOT
+        self.experiments_dir = Path.home() / 'Desktop' / 'QuPyt-master' / 'GUI' / 'experiments'
+        self.output_dir = Path.home() / 'Desktop' / 'QuPyt-master'
         self.experiment_descs = load_experiments(self.experiments_dir)
         self._suppress_auto_switch = False
         self.setWindowTitle('QuPyt Experiment GUI')
@@ -144,8 +153,14 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # --- Setup Tab ---
         setup = QtWidgets.QWidget()
+        setup_v = QtWidgets.QVBoxLayout(setup)
+        form_container = QtWidgets.QWidget()
+        form = QtWidgets.QFormLayout(form_container)
+        scroll = QtWidgets.QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setWidget(form_container)
+        setup_v.addWidget(scroll)
         self.tabs.addTab(setup, 'Setup')
-        form = QtWidgets.QFormLayout(setup)
         self.setup_form = form
         
         # Watcher button
@@ -180,8 +195,8 @@ class ODMRGui(QtWidgets.QMainWindow):
         form.addRow('Time unit:', self.unit_combo)
 
         # Sweep & Power
-        self.start_input = QtWidgets.QDoubleSpinBox(); self.start_input.setSuffix(' GHz'); self.start_input.setSingleStep(0.1)
-        self.stop_input  = QtWidgets.QDoubleSpinBox(); self.stop_input .setSuffix(' GHz'); self.stop_input .setSingleStep(0.1)
+        self.start_input = QtWidgets.QDoubleSpinBox(); self.start_input.setSuffix(' GHz')
+        self.stop_input = QtWidgets.QDoubleSpinBox();  self.stop_input.setSuffix(' GHz')
         self.steps_input = QtWidgets.QSpinBox()
         self.power_input = QtWidgets.QDoubleSpinBox(); self.power_input.setSuffix(' dBm')
         form.addRow('Sweep start:', self.start_input)
@@ -310,9 +325,12 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.load_cfg_btn.clicked.connect(self._load_config)
 
         # --- Live Tab ---
+        live_scroll = QScrollArea()
+        live_scroll.setWidgetResizable(True)
         live = QtWidgets.QWidget()
-        self.tabs.addTab(live, 'Live')
-        live_layout = QtWidgets.QVBoxLayout(live)
+        live_layout = QVBoxLayout(live)
+        live_scroll.setWidget(live)
+        self.tabs.addTab(live_scroll, 'Live')
         self.run_live_btn = QtWidgets.QPushButton("Run experiment")
         self.run_live_btn.clicked.connect(self._deploy_yaml_and_run)
         live_layout.addWidget(self.run_live_btn)
@@ -324,6 +342,9 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # ——— Live ODMR Spectrum Plot ———
         self.live_plot = pg.PlotWidget()
+        self.live_plot.setMinimumHeight(240)
+        self.live_plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                     QtWidgets.QSizePolicy.Policy.Expanding)
         self.live_curve = self.live_plot.plot(
             [], [], 
             pen=None,
@@ -339,6 +360,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         # ——— Live DAQ Voltage Plot ———
         self.live_daq = []
         self.daq_plot = pg.PlotWidget(title="DAQ Voltage")
+        self.daq_plot.setMinimumHeight(180)
+        self.daq_plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                    QtWidgets.QSizePolicy.Policy.Expanding)
         self.daq_curve = self.daq_plot.plot([], [], pen=None, symbol='x')
         self.daq_plot.setLabel('bottom', 'Frequency (GHz)')
         self.daq_plot.setLabel('left', 'Voltage (V)')
@@ -385,8 +409,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         pb.addWidget(self.sweep_bar)
         pb.addWidget(self.count_gauge)
         prog_box.setLayout(pb)
-        live_layout.addWidget(prog_box)
-
+        
         self.log_output = QPlainTextEdit()
         self.log_output.setReadOnly(True)
 
@@ -403,13 +426,14 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Status Section
         live_layout.addWidget(status_box)
-
-        # Progress Section 
         live_layout.addWidget(prog_box)
 
         # Results Tab
+        res_scroll = QScrollArea()
+        res_scroll.setWidgetResizable(True)
         res = QtWidgets.QWidget()
-        self.tabs.addTab(res, 'Results')
+        res_scroll.setWidget(res)
+        self.tabs.addTab(res_scroll, 'Results')
 
         # ─── File-selector dropdown ───
         self.file_selector = QtWidgets.QComboBox()
@@ -431,6 +455,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         meta_layout = QVBoxLayout()
         self.meta_text = QTextEdit()
         self.meta_text.setReadOnly(True)
+        self.meta_text.setMaximumHeight(160)
         meta_layout.addWidget(self.meta_text)
         meta_box.setLayout(meta_layout)
 
@@ -438,6 +463,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         proc_box = QGroupBox('Processed ODMR Spectrum')
         proc_layout = QVBoxLayout()
         self.proc_plot = pg.PlotWidget()
+        self.proc_plot.setMinimumHeight(260)
         proc_layout.addWidget(self.proc_plot)
 
         # Add a "Save Spectrum" button
@@ -486,9 +512,12 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.export_btn.clicked.connect(self._export)
 
         # ——— Experiments Tab ———
+        exp_scroll = QScrollArea()
+        exp_scroll.setWidgetResizable(True)
         exp_mgmt = QtWidgets.QWidget()
-        self.tabs.addTab(exp_mgmt, "Experiments")
         mgmt_layout = QVBoxLayout(exp_mgmt)
+        exp_scroll.setWidget(exp_mgmt)
+        self.tabs.addTab(exp_scroll, "Experiments")
 
         # List of existing experiments
         self.exp_list = QtWidgets.QListWidget()
@@ -856,7 +885,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         except AttributeError:
             # No data yet; leave Results blank
             pass
-      
+
         # switch to the Results tab
         self.tabs.setCurrentIndex(2)
 
@@ -897,6 +926,7 @@ class ODMRGui(QtWidgets.QMainWindow):
                 "No data loaded yet. Run an experiment or select a file to see results."
             )
             self.proc_plot.clear()
+
             for r in range(self.fit_table.rowCount()):
                 self.fit_table.setItem(r, 1, QTableWidgetItem("—"))
             self.summary_label.setText("No data loaded")
@@ -949,6 +979,7 @@ class ODMRGui(QtWidgets.QMainWindow):
             f0 = self.start_input.value() * 1e9
             f1 = self.stop_input.value()  * 1e9
         freqs = np.linspace(f0, f1, self.data.shape[1]) / 1e9
+        
         self.proc_plot.clear()
 
         if self.sub_input.isChecked():
@@ -1199,6 +1230,9 @@ class ODMRGui(QtWidgets.QMainWindow):
     def _init_pulse_diagram(self):
         # make the PlotWidget
         self.pulse_plot = pg.PlotWidget(title="Pulse Diagram")
+        self.pulse_plot.setMinimumHeight(240)
+        self.pulse_plot.setSizePolicy(QtWidgets.QSizePolicy.Policy.Expanding,
+                                      QtWidgets.QSizePolicy.Policy.Preferred)
         self.pulse_plot.setLabel('bottom', 'Time')
         self.pulse_plot.getViewBox().invertY(True)   # so lane 0 is at top
         # style: white background with a thin black border
@@ -1226,7 +1260,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         }
 
         # add to the form 
-        self.tabs.widget(0).layout().addRow('Pulse diagram:', self.pulse_plot)
+        self.tabs.widget(0).layout().itemAt(0).widget().widget().layout().addRow('Pulse diagram:', self.pulse_plot)
 
         #  hook redraw to *all* pulse-timing spin-boxes
         for sb in (
@@ -1549,6 +1583,3 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Also clear out the waiting room directory
         self._clear_waiting_room()
-
-
-
