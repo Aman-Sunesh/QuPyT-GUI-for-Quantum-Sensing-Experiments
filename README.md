@@ -80,7 +80,7 @@ cd /d "C:/path/to/QuPyt-master"
 set PYTHONPATH=%CD%
 "%CD%\venv\Scripts\pythonw.exe" -m GUI.main
 ```
-
+ 
 ---
 
 ## Modified Core Files
