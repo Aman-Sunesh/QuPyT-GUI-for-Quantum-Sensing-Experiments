@@ -958,7 +958,8 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # 2. Processed Spectrum (MW-on / MW-off subtraction support)
         try:
-            f0, f1 = cfg['dynamic_devices']['mw_source']['config']['frequency']
+            freq_cfg = cfg['dynamic_devices']['mw_source']['config']['frequency']
+            f0, f1 = map(float, freq_cfg)
         except Exception:
             # Fallback to GUI sweep if YAML has a scalar or missing field
             f0 = self.start_input.value() * 1e9
