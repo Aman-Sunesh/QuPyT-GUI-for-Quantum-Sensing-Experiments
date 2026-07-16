@@ -16,7 +16,7 @@ import logging
 from PyQt6.QtWidgets import QApplication, QMessageBox
 from PyQt6 import QtCore, QtGui
 
-def main
+def main():
     """
     Launch the QuPyt ODMR GUI.
 
