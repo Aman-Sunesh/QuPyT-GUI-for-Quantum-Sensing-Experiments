@@ -22,7 +22,7 @@ QuPyt-GUI-for-Quantum-Sensing-Experiments/
 │   ├── channels.py                              # Defines TTL channel labels and hardware mappings
 │   ├── experiment_editor.py                     # GUI dialog for editing experiment parameters and pulse sequences
 │   ├── experiment_factory.py                    # Backend logic to generate experiment YAML files
-│   ├── experiment_yaml.py                       # YAML construction helper module
+│   ├── odmr_yaml.py                             # YAML construction helper module
 │   ├── generic_generator.py                     # Shared logic for generating pulse sequence structures
 │   ├── main.py                                  # GUI launcher (entry point of the application)
 │   ├── odmr_gui.py                              # Core GUI logic for ODMR experiment integration
@@ -35,10 +35,24 @@ QuPyt-GUI-for-Quantum-Sensing-Experiments/
 │   ├── ODMR.yaml                                 # Descriptor for Optically Detected Magnetic Resonance scan
 │   └── XY8.yaml                                  # Descriptor for XY8 decoupling pulse sequence
 
+├── images/                                      # Screenshots and example experimental results
+│   ├── odmr_resonance_2026-07-17_02-01-45.png
+│   └── odmr_resonance_2026-07-17_02-05-38.png
+
 ├── QuPyt GUI User Manual.pdf                    # Comprehensive user manual detailing all GUI features
 ├── requirements.txt                             # List of required Python packages for setting up environment
 └── README.md                                    # Project overview, setup instructions, and launch guide
 ```
+---
+
+## Example ODMR Result
+
+The Results tab separately visualizes the normalized channel difference,
+`(CH0 - CH1) / (CH0 + CH1)`, and the combined-channel mean,
+`(CH0 + CH1) / 2`. The example below shows a repeatable ODMR resonance
+near 2.89 GHz.
+
+![ODMR resonance displayed in the QuPyt GUI](images/odmr_resonance_run_01.png)
 
 ---
 
