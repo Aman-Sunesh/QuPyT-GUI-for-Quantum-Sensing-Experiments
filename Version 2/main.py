@@ -39,7 +39,7 @@ def main():
         app = QApplication(sys.argv)
 
         # Import GUI code only after the app exists
-        from GUI import odmr_gui
+        import odmr_gui
         sys.excepthook = odmr_gui.excepthook
 
         # Instantiate and configure the main window
@@ -71,6 +71,3 @@ def main():
 
 if __name__ == '__main__':
     main()
-
-
-
