@@ -1,0 +1,254 @@
+experiment_type: XY8
+pulse_generator: ''
+parameters:
+- name: mw_duration
+  label: "MW \u03C0-pulse duration"
+  type: float
+  default: 0.5
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+- name: tau
+  label: Inter-pulse delay
+  type: float
+  default: 2.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+- name: laserduration
+  label: Laser repolarisation
+  type: float
+  default: 100.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+- name: read_time
+  label: Readout window
+  type: float
+  default: 10.0
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+- name: frames
+  label: Number of repetitions
+  type: int
+  default: 1
+  min: 1
+  max: 9999
+- name: I_pulse
+  label: I-pulse duration
+  type: float
+  default: 0.25
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+- name: Q_pulse
+  label: Q-pulse duration
+  type: float
+  default: 0.25
+  min: 0.0
+  max: 1000.0
+  unit: "\xB5s"
+pulses:
+- channel: START
+  start: '0'
+  duration: '1'
+  blocks:
+  - wait_loop
+- channel: LASER
+  start: '{{ buffer_between_pulses }}'
+  duration: '{{ laserduration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 0*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 1*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 2*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 3*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 4*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 5*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 6*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 7*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 8*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 9*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) }}'
+  duration: '{{ tau * 5 }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 0*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 1*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 2*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 3*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 4*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 5*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 6*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 7*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 8*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: MW
+  start: '{{ laserduration + buffer_between_pulses + 10*(mw_duration + tau) + tau*5
+    + 9*(mw_duration + tau) }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: Q
+  start: '{{ laserduration + buffer_between_pulses + 0.4 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.10 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.18 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.26 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.34 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.42 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.60 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.65 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.70 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: I
+  start: '{{ laserduration + buffer_between_pulses + 0.75 * 10 * (mw_duration + tau)
+    }}'
+  duration: '{{ mw_duration }}'
+  blocks:
+  - wait_loop
+- channel: READ
+  start: "{{ laserduration\n   + buffer_between_pulses\n   + 10*(mw_duration + tau)\n\
+    \   + tau*5\n   + 5*(mw_duration + tau)\n}}"
+  duration: '{{ read_trigger_duration }}'
+  blocks:
+  - block_0
+- channel: LASER
+  start: "{{ laserduration\n   + buffer_between_pulses\n   + 10*(mw_duration + tau)\n\
+    \   + tau*5\n   + 10*(mw_duration + tau)\n   + readout_and_repol_gap\n   + read_time\n\
+    }}"
+  duration: '{{ laserduration }}'
+  blocks:
+  - wait_loop
+constants:
+  buffer_between_pulses: '1'
+  readout_and_repol_gap: '2'
+  read_trigger_duration: '2'
