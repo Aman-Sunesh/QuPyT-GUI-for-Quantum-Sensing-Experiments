@@ -128,6 +128,12 @@ def generate_from_descriptor(desc: dict, params: dict, output_path: str = "user_
         for pulse in desc.get("pulses", []):
             channel = str(pulse.get("channel", "")).strip()
 
+            # Legacy experiment descriptors used "MW" for the
+            # zero-phase microwave gate.  The current hardware routes
+            # zero-phase microwave pulses through the I input on channel 4.
+            if channel == "MW":
+                channel = "I"
+
             if not channel or channel == "START":
                 continue
 

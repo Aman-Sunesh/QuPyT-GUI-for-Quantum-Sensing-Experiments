@@ -7,6 +7,7 @@
 
 import os
 import yaml
+import numpy as np
 from pathlib import Path
 from channels import CHANNEL_MAPPING
 from yaml.dumper import SafeDumper
@@ -41,18 +42,18 @@ _default_float_repr = SafeRepresenter.represent_float
 
 def _float_representer(dumper, value: float):
     """
-    Emit large magnitudes in compact scientific notation like '2.0e9'
-    as a *plain* scalar so no quotes or !!float tag are added.
+    Emit large magnitudes in scientific notation while retaining
+    enough precision for narrow microwave-frequency sweeps.
     """
     if abs(value) >= 1e6:
-        sig = 3  # mantissa significant digits
-        s = f"{float(value):.{sig}e}"      # e.g., '2.820e+09'
+        decimal_places = 12
+        s = f"{float(value):.{decimal_places}e}"
         mant, exp = s.split('e')
         mant = mant.rstrip('0').rstrip('.') or '0'
         if '.' not in mant:
-            mant += '.0'                   # ensure '2.0' style
-        exp = str(int(exp))                # drop '+' and leading zeros
-        txt = f"{mant}e{exp}"              # e.g., '2.82e9'
+            mant += '.0'
+        exp = str(int(exp))
+        txt = f"{mant}e{exp}"
         return dumper.represent_scalar('tag:yaml.org,2002:float', txt)
     return _default_float_repr(dumper, value)
 
@@ -71,10 +72,20 @@ def render_experiment_yaml(vals: dict, output_path: str):
     Build a YAML dict from vals and write it atomically to output_path.
     Expects vals to contain at least the keys:
       - experiment_type, averages, frames, apd_input,
-        MW, LASER, READ, START, n_dynamic_steps,
+        I, Q, LASER, READ, START, n_dynamic_steps,
         address, freq_start, freq_stop, power,
         mode, ref_channels, ps_path,
         mw_duration, laserduration, read_time, max_rate
+
+    Dynamic sweep modes:
+
+      frequency:
+        Sweep freq_start -> freq_stop while holding power fixed.
+
+      power:
+        Sweep power_start -> power_stop while holding
+        fixed_frequency constant.
+
     Optionally: I_pulse, Q_pulse, tau, blocks.
     """
     mw_dur = float(vals['mw_duration'])
@@ -113,11 +124,121 @@ def render_experiment_yaml(vals: dict, output_path: str):
                 "or exactly pulse_sequence_steps values"
             )
         
-    # normalise output path & some inputs
+    # Normalise output path and dynamic-sweep inputs.
     output_path = Path(output_path)
     output_path.parent.mkdir(parents=True, exist_ok=True)
+
+    dynamic_steps = int(vals["n_dynamic_steps"])
+
+    if dynamic_steps < 1:
+        raise ValueError(
+            "n_dynamic_steps must be at least 1"
+        )
+
+    dynamic_sweep_type = str(
+        vals.get(
+            "dynamic_sweep_type",
+            "frequency",
+        )
+    ).strip().lower()
+
+    dynamic_sweep_aliases = {
+        "frequency": "frequency",
+        "frequency sweep": "frequency",
+        "power": "power",
+        "power sweep": "power",
+        "microwave power": "power",
+        "microwave power sweep": "power",
+    }
+
+    try:
+        dynamic_sweep_type = (
+            dynamic_sweep_aliases[
+                dynamic_sweep_type
+            ]
+        )
+    except KeyError as error:
+        raise ValueError(
+            "dynamic_sweep_type must be either "
+            "'frequency' or 'power'"
+        ) from error
+
     freq_start = float(vals['freq_start'])
     freq_stop  = float(vals['freq_stop'])
+
+    fixed_frequency = float(
+        vals.get(
+            "fixed_frequency",
+            freq_start,
+        )
+    )
+
+    fixed_power = float(
+        vals.get(
+            "power",
+            0.0,
+        )
+    )
+
+    power_start = float(
+        vals.get(
+            "power_start",
+            fixed_power,
+        )
+    )
+
+    power_stop = float(
+        vals.get(
+            "power_stop",
+            fixed_power,
+        )
+    )
+
+    if dynamic_sweep_type == "power":
+        if power_stop < power_start:
+            raise ValueError(
+                "power_stop must be greater than or "
+                "equal to power_start"
+            )
+
+        # The frequency remains fixed at every dynamic step.
+        freq_start = fixed_frequency
+        freq_stop = fixed_frequency
+
+        # Existing DynamicDeviceHandler interprets this pair as
+        # a linear amplitude sweep.
+        power = [
+            power_start,
+            power_stop,
+        ]
+
+        dynamic_axis_parameter = (
+            "microwave_power"
+        )
+        dynamic_axis_unit = "dBm"
+        dynamic_axis_values = np.linspace(
+            power_start,
+            power_stop,
+            dynamic_steps,
+        ).tolist()
+
+    else:
+        if freq_stop < freq_start:
+            raise ValueError(
+                "freq_stop must be greater than or "
+                "equal to freq_start"
+            )
+
+        power = fixed_power
+
+        dynamic_axis_parameter = "frequency"
+        dynamic_axis_unit = "Hz"
+        dynamic_axis_values = np.linspace(
+            freq_start,
+            freq_stop,
+            dynamic_steps,
+        ).tolist()
+
     mode = vals.get('mode', 'spread')
     if mode not in ('spread', 'sum'):
         mode = 'spread'
@@ -141,7 +262,6 @@ def render_experiment_yaml(vals: dict, output_path: str):
         )
 
     # amplitude shape: allow constant, [start, stop], or per-channel dict
-    power = vals.get('power')
     amp_cfg = []
 
     if isinstance(power, dict):
@@ -174,12 +294,6 @@ def render_experiment_yaml(vals: dict, output_path: str):
             ])
         )
 
-    # Quick sanity checks.
-    if freq_stop < freq_start:
-        raise ValueError(
-            "freq_stop must be greater than or equal to freq_start"
-        )
-
     reference_channels = max(
         1,
         int(vals["ref_channels"]),
@@ -198,6 +312,15 @@ def render_experiment_yaml(vals: dict, output_path: str):
         'pulse_sequence_steps': ps_steps,
         'result_schema_version': 2,
         'data_layout': 'channel_ps_dynamic_frame_roi',
+        'dynamic_sweep_type': dynamic_sweep_type,
+        'dynamic_axis': {
+            'parameter': dynamic_axis_parameter,
+            'values': [
+                float(value)
+                for value in dynamic_axis_values
+            ],
+            'unit': dynamic_axis_unit,
+        },
         'sensor': {
             'type': 'DAQ',
             'config': {
@@ -211,7 +334,7 @@ def render_experiment_yaml(vals: dict, output_path: str):
             'config': {},
             'channel_mapping': CHANNEL_MAPPING.copy()
         },
-        'dynamic_steps': vals['n_dynamic_steps'],
+        'dynamic_steps': dynamic_steps,
         'dynamic_devices': {
             'mw_source': {
                 'device_type': mw_device_type,
@@ -231,7 +354,7 @@ def render_experiment_yaml(vals: dict, output_path: str):
         'static_devices': {},
         'data': {
             'averaging_mode': mode,
-            'dynamic_steps': vals['n_dynamic_steps'],
+            'dynamic_steps': dynamic_steps,
             'ps_steps': ps_steps,
             'live_compression': False,
             'reference_channels': vals['ref_channels']

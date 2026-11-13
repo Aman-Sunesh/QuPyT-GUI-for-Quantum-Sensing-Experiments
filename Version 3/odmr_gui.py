@@ -74,6 +74,10 @@ NON_PULSE_SWEEP_PARAMETERS = {
     "freq_stop",
     "sweep_start",
     "sweep_stop",
+    "dynamic_sweep_type",
+    "fixed_frequency",
+    "power_start",
+    "power_stop",
     "power",
     "rf_power",
     "averages",
@@ -97,6 +101,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.process = None
         self.param_widgets = {}
         self._build_ui()
+        self.tabs.currentChanged.connect(
+            self._on_tab_changed
+        )
 
         # Always begin with an empty QuPyt waiting room.
         self._clear_waiting_room()
@@ -142,11 +149,31 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.output_dir.glob(f"{exp_name}_*.npy"),
             key=lambda path: path.stat().st_mtime
         )
-        self.file_selector.clear()
-        self.file_selector.addItems([str(path) for path in files])
 
-        if files:
-            self.file_selector.setCurrentIndex(len(files) - 1)
+        # Rebuilding the selector emits currentTextChanged by default.
+        # That would immediately load an old result whenever the user
+        # merely switches experiments in the Setup tab.
+        signals_were_blocked = self.file_selector.blockSignals(
+            True
+        )
+
+        try:
+            self.file_selector.clear()
+            self.file_selector.addItems(
+                [
+                    str(path)
+                    for path in files
+                ]
+            )
+
+            if files:
+                self.file_selector.setCurrentIndex(
+                    len(files) - 1
+                )
+        finally:
+            self.file_selector.blockSignals(
+                signals_were_blocked
+            )
 
     def _on_started(self):
         # called when QProcess starts
@@ -155,9 +182,171 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.status_led.setStyleSheet("background-color: green; border-radius: 8px;")
         self.status_label.setText("Running")
 
+    def _current_dynamic_axis(self):
+        """
+        Return the currently configured GUI dynamic axis as:
+
+            parameter, display_unit, display_values
+
+        Frequency values are returned in GHz for display.
+        Power values are returned in dBm.
+        """
+        steps = max(
+            1,
+            self.dynamic_input.value(),
+        )
+
+        if (
+            self.dynamic_sweep_combo.currentText()
+            == "Microwave power sweep"
+        ):
+            return (
+                "microwave_power",
+                "dBm",
+                np.linspace(
+                    self.power_start_input.value(),
+                    self.power_stop_input.value(),
+                    steps,
+                ),
+            )
+
+        return (
+            "frequency",
+            "GHz",
+            np.linspace(
+                self.start_input.value(),
+                self.stop_input.value(),
+                steps,
+            ),
+        )
+
+    @staticmethod
+    def _dynamic_axis_label(
+        parameter,
+        unit,
+    ):
+        if parameter == "microwave_power":
+            return "Microwave power (dBm)"
+
+        if parameter == "frequency":
+            return "Frequency (GHz)"
+
+        readable_parameter = (
+            str(parameter)
+            .replace("_", " ")
+            .strip()
+            .title()
+        )
+
+        if unit:
+            return f"{readable_parameter} ({unit})"
+
+        return readable_parameter
+
+    def _update_dynamic_sweep_controls(self, *_):
+        if not hasattr(
+            self,
+            "dynamic_sweep_combo",
+        ):
+            return
+
+        power_sweep = (
+            self.dynamic_sweep_combo.currentText()
+            == "Microwave power sweep"
+        )
+
+        frequency_widgets = (
+            self.frequency_start_label,
+            self.start_input,
+            self.frequency_stop_label,
+            self.stop_input,
+            self.fixed_power_label,
+            self.power_input,
+        )
+
+        power_widgets = (
+            self.fixed_frequency_label,
+            self.fixed_frequency_input,
+            self.power_start_label,
+            self.power_start_input,
+            self.power_stop_label,
+            self.power_stop_input,
+        )
+
+        for widget in frequency_widgets:
+            widget.setVisible(
+                not power_sweep
+            )
+
+        for widget in power_widgets:
+            widget.setVisible(
+                power_sweep
+            )
+
+        if not hasattr(
+            self,
+            "dynamic_input",
+        ):
+            return
+
+        parameter, unit, _ = (
+            self._current_dynamic_axis()
+        )
+
+        axis_label = self._dynamic_axis_label(
+            parameter,
+            unit,
+        )
+
+        for plot_name in (
+            "live_ch0_plot",
+            "live_ch1_plot",
+            "live_normalized_plot",
+            "live_combined_plot",
+        ):
+            plot_widget = getattr(
+                self,
+                plot_name,
+                None,
+            )
+
+            if plot_widget is not None:
+                plot_widget.setLabel(
+                    "bottom",
+                    axis_label,
+                )
+
+        if hasattr(self, "freq_label"):
+            if power_sweep:
+                self.freq_label.setText(
+                    "Microwave power: -- dBm"
+                )
+            else:
+                self.freq_label.setText(
+                    "Frequency: -- GHz"
+                )
+
     def _on_results_control_changed(self, *_):
         self._update_results_view_visibility()
         self._show_results()
+
+    def _on_tab_changed(self, index):
+        """
+        Load the newest result for the selected experiment whenever
+        the user opens the Results tab.
+        """
+        if self.tabs.widget(index) is not self.results_tab:
+            return
+
+        if self._suppress_auto_switch:
+            return
+
+        self._populate_file_selector()
+
+        filename = self.file_selector.currentText()
+
+        if filename:
+            self._on_file_selected(filename)
 
     def _update_results_view_visibility(self):
         if not hasattr(self, "result_view_combo"):
@@ -167,18 +356,26 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.result_view_combo.currentText()
             == "2D heatmap"
         )
-
+        frequency_sweep = bool(
+            getattr(
+                self,
+                "result_is_frequency_sweep",
+                True,
+            )
+        )
         self.proc_box.setVisible(
             not showing_heatmap
         )
         self.fit_box.setVisible(
             not showing_heatmap
+            and frequency_sweep
         )
         self.mean_proc_box.setVisible(
             not showing_heatmap
         )
         self.mean_fit_box.setVisible(
             not showing_heatmap
+            and frequency_sweep
         )
         self.heatmap_box.setVisible(
             showing_heatmap
@@ -239,9 +436,38 @@ class ODMRGui(QtWidgets.QMainWindow):
                     "Could not read result metadata %s",
                     candidate,
                 )
+        (
+            dynamic_parameter,
+            dynamic_unit,
+            dynamic_values,
+        ) = self._current_dynamic_axis()
+
+        stored_dynamic_values = (
+            dynamic_values * 1e9
+            if dynamic_parameter == "frequency"
+            else dynamic_values
+        )
 
         config = {
             "dynamic_steps": self.dynamic_input.value(),
+            "dynamic_sweep_type": (
+                "power"
+                if dynamic_parameter
+                == "microwave_power"
+                else "frequency"
+            ),
+            "dynamic_axis": {
+                "parameter": dynamic_parameter,
+                "values": (
+                    stored_dynamic_values.tolist()
+                ),
+                "unit": (
+                    "Hz"
+                    if dynamic_parameter
+                    == "frequency"
+                    else dynamic_unit
+                ),
+            },
             "pulse_sequence_steps": 1,
             "averages": self.avg_input.value(),
             "result_schema_version": 2,
@@ -437,71 +663,193 @@ class ODMRGui(QtWidgets.QMainWindow):
             f"Unsupported averaging mode {averaging_mode!r}."
         )
     
-    def _frequency_axis_from_config(
+
+    def _dynamic_axis_from_config(
         self,
         config,
         dynamic_steps,
     ):
-        frequency_config = (
-            config.get(
-                "dynamic_devices",
-                {},
-            )
-            .get(
-                "mw_source",
-                {},
-            )
-            .get(
-                "config",
-                {},
-            )
-            .get("frequency")
+        """
+        Return:
+
+            parameter, display_unit, display_values
+
+        New result files use config["dynamic_axis"].
+        Older files fall back to the microwave frequency
+        configuration and are interpreted as frequency sweeps.
+        """
+        axis_config = config.get(
+            "dynamic_axis",
+            {},
         )
 
-        if frequency_config is None:
-            return np.linspace(
-                self.start_input.value() * 1e9,
-                self.stop_input.value() * 1e9,
+        parameter = str(
+            axis_config.get("parameter")
+            or config.get(
+                "dynamic_sweep_type",
+                "frequency",
+            )
+        ).strip().lower()
+
+        power_axis = (
+            "power" in parameter
+            or parameter == "amplitude"
+        )
+
+        parameter = (
+            "microwave_power"
+            if power_axis
+            else "frequency"
+        )
+
+        unit = str(
+            axis_config.get("unit")
+            or (
+                "dBm"
+                if power_axis
+                else "Hz"
+            )
+        ).strip()
+
+        def extract_numeric_list(value):
+            if isinstance(value, np.ndarray):
+                value = value.tolist()
+
+            if isinstance(
+                value,
+                (list, tuple),
+            ):
+                if (
+                    value
+                    and all(
+                        isinstance(
+                            item,
+                            (
+                                int,
+                                float,
+                                np.integer,
+                                np.floating,
+                            ),
+                        )
+                        for item in value
+                    )
+                ):
+                    return [
+                        float(item)
+                        for item in value
+                    ]
+
+                for item in value:
+                    nested = extract_numeric_list(
+                        item
+                    )
+
+                    if nested is not None:
+                        return nested
+
+            return None
+
+        numeric_values = extract_numeric_list(
+            axis_config.get("values")
+        )
+
+        if numeric_values is None:
+            dynamic_config = (
+                config.get(
+                    "dynamic_devices",
+                    {},
+                )
+                .get(
+                    "mw_source",
+                    {},
+                )
+                .get(
+                    "config",
+                    {},
+                )
+            )
+
+            config_key = (
+                "amplitude"
+                if power_axis
+                else "frequency"
+            )
+
+            numeric_values = extract_numeric_list(
+                dynamic_config.get(
+                    config_key
+                )
+            )
+
+        if numeric_values is None:
+            (
+                current_parameter,
+                current_unit,
+                current_values,
+            ) = self._current_dynamic_axis()
+
+            if current_parameter == parameter:
+                return (
+                    current_parameter,
+                    current_unit,
+                    np.asarray(
+                        current_values,
+                        dtype=float,
+                    ),
+                )
+
+            numeric_values = (
+                [0.0]
+                if dynamic_steps == 1
+                else [0.0, float(dynamic_steps - 1)]
+            )
+
+        if len(numeric_values) == dynamic_steps:
+            values = np.asarray(
+                numeric_values,
+                dtype=float,
+            )
+
+        elif len(numeric_values) == 2:
+            values = np.linspace(
+                numeric_values[0],
+                numeric_values[1],
                 dynamic_steps,
             )
 
-        try:
-            if (
-                isinstance(
-                    frequency_config,
-                    (list, tuple),
-                )
-                and len(frequency_config) == 2
-                and isinstance(
-                    frequency_config[1],
-                    (list, tuple),
-                )
-            ):
-                start_hz, stop_hz = map(
-                    float,
-                    frequency_config[1],
-                )
-            else:
-                start_hz, stop_hz = map(
-                    float,
-                    frequency_config,
-                )
-        except (
-            TypeError,
-            ValueError,
-            KeyError,
-        ):
-            start_hz = (
-                self.start_input.value() * 1e9
-            )
-            stop_hz = (
-                self.stop_input.value() * 1e9
+        elif len(numeric_values) == 1:
+            values = np.full(
+                dynamic_steps,
+                numeric_values[0],
+                dtype=float,
             )
 
-        return np.linspace(
-            start_hz,
-            stop_hz,
-            dynamic_steps,
+        else:
+            values = np.arange(
+                dynamic_steps,
+                dtype=float,
+            )
+
+        if parameter == "microwave_power":
+            return (
+                parameter,
+                "dBm",
+                values,
+            )
+
+        unit_lower = unit.lower()
+
+        if unit_lower == "hz":
+            values = values / 1e9
+        elif unit_lower == "khz":
+            values = values / 1e6
+        elif unit_lower == "mhz":
+            values = values / 1e3
+
+        return (
+            "frequency",
+            "GHz",
+            values,
         )
 
     def _pulse_sequence_axis_from_config(
@@ -593,9 +941,9 @@ class ODMRGui(QtWidgets.QMainWindow):
             return self.result_channel_means_all[0]
 
         if choice == "Normalized difference":
-            return self.result_processed_all
+            return self.result_normalized_all
 
-        return self.result_processed_all
+        return self.result_normalized_all
     
     def _draw_result_heatmap(self):
         matrix = np.asarray(
@@ -603,7 +951,9 @@ class ODMRGui(QtWidgets.QMainWindow):
             dtype=float,
         )
 
-        frequencies = self.result_freqs_ghz
+        dynamic_values = (
+            self.result_dynamic_values
+        )
         ps_values = self.result_ps_values
 
         self.heatmap_image.setImage(
@@ -611,18 +961,18 @@ class ODMRGui(QtWidgets.QMainWindow):
             autoLevels=True,
         )
 
-        if len(frequencies) > 1:
+        if len(dynamic_values) > 1:
             dx = (
-                frequencies[-1]
-                - frequencies[0]
-            ) / (len(frequencies) - 1)
+                dynamic_values[-1]
+                - dynamic_values[0]
+            ) / (len(dynamic_values) - 1)
         else:
             dx = 1e-6
 
         rectangle = QtCore.QRectF(
-            frequencies[0] - dx / 2,
+            dynamic_values[0] - dx / 2,
             -0.5,
-            dx * len(frequencies),
+            dx * len(dynamic_values),
             matrix.shape[0],
         )
 
@@ -663,7 +1013,10 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         self.heatmap_plot.setLabel(
             "bottom",
-            "Frequency (GHz)",
+            self._dynamic_axis_label(
+                self.result_dynamic_parameter,
+                self.result_dynamic_unit,
+            ),
         )
         self.heatmap_plot.setLabel(
             "left",
@@ -728,6 +1081,23 @@ class ODMRGui(QtWidgets.QMainWindow):
             if parameter.get("name") == parameter_name:
                 return parameter
 
+        # tau has a dedicated GUI control and is always available to the
+        # pulse-sequence generator, even if an older experiment descriptor
+        # does not explicitly declare it as a parameter.
+        if (
+            parameter_name == "tau"
+            and hasattr(self, "tau_input")
+        ):
+            return {
+                "name": "tau",
+                "label": "τ (inter-pulse)",
+                "type": "float",
+                "default": self.tau_input.value() * self.time_factor,
+                "min": 0.0,
+                "max": 1e6,
+                "unit": "µs",
+            }
+
         return None
 
     def _refresh_ps_sweep_parameters(
@@ -774,6 +1144,18 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.ps_sweep_param.addItem(
                 parameter.get("label", name),
                 name,
+            )
+
+        # tau is a built-in timing control in the GUI.  Keep it sweepable
+        # even for descriptors that were created before tau was added to
+        # their parameter table.
+        if (
+            hasattr(self, "tau_input")
+            and self.ps_sweep_param.findData("tau") < 0
+        ):
+            self.ps_sweep_param.addItem(
+                "τ (inter-pulse)",
+                "tau",
             )
 
         if previous_name is not None:
@@ -1157,10 +1539,32 @@ class ODMRGui(QtWidgets.QMainWindow):
         form.addRow('Time unit:', self.unit_combo)
 
         # Sweep & Power
+        self.dynamic_sweep_combo = (
+            QtWidgets.QComboBox()
+        )
+        self.dynamic_sweep_combo.addItems(
+            [
+                "Frequency sweep",
+                "Microwave power sweep",
+            ]
+        )
+
+        form.addRow(
+            "Dynamic sweep:",
+            self.dynamic_sweep_combo,
+        )
+
         self.start_input = QtWidgets.QDoubleSpinBox(); self.start_input.setSuffix(' GHz')
         self.stop_input = QtWidgets.QDoubleSpinBox();  self.stop_input.setSuffix(' GHz')
+        self.fixed_frequency_input = QtWidgets.QDoubleSpinBox()
+        self.fixed_frequency_input.setSuffix(' GHz')
+
         self.steps_input = QtWidgets.QSpinBox()
         self.power_input = QtWidgets.QDoubleSpinBox(); self.power_input.setSuffix(' dBm')
+        self.power_start_input = QtWidgets.QDoubleSpinBox()
+        self.power_start_input.setSuffix(' dBm')
+        self.power_stop_input = QtWidgets.QDoubleSpinBox()
+        self.power_stop_input.setSuffix(' dBm')
 
         # Physical microwave-generator output port.
         self.mw_out_combo = QtWidgets.QComboBox()
@@ -1176,22 +1580,82 @@ class ODMRGui(QtWidgets.QMainWindow):
         ])
         self.mw_dev_combo.setCurrentText('WindFreak')
 
-        for frequency_input in (self.start_input, self.stop_input):
+        for frequency_input in (
+            self.start_input,
+            self.stop_input,
+            self.fixed_frequency_input,
+        ):
             frequency_input.setRange(0.0, 100.0)
             frequency_input.setDecimals(6)
             frequency_input.setSingleStep(0.001)
 
         self.start_input.setValue(2.65)
-        self.power_input.setRange(0.01, 8.0)
+        self.stop_input.setValue(3.15)
+        self.fixed_frequency_input.setValue(2.87)
+
+        for power_widget in (
+            self.power_input,
+            self.power_start_input,
+            self.power_stop_input,
+        ):
+            # Preserve the existing hardware-safe upper limit while
+            # permitting useful negative-dBm measurements.
+            power_widget.setRange(-60.0, 8.0)
+            power_widget.setDecimals(2)
+            power_widget.setSingleStep(0.5)
         self.power_input.setValue(1.0)
-        self.power_input.setDecimals(2)
-        self.power_input.setSingleStep(0.5)        
-        
-        form.addRow('Sweep start:', self.start_input)
-        form.addRow('Sweep stop:', self.stop_input)
+        self.power_start_input.setValue(0.1)
+        self.power_stop_input.setValue(8)
+
+        self.frequency_start_label = QLabel(
+            "Frequency start:"
+        )
+        self.frequency_stop_label = QLabel(
+            "Frequency stop"
+        )
+        self.fixed_frequency_label = QLabel(
+            "Fixed frequency:"
+        )
+        self.fixed_power_label = QLabel(
+            "Fixed RF power:"
+        )
+        self.power_start_label = QLabel(
+            "Power start:"
+        )
+        self.power_stop_label = QLabel(
+            "Power stop:"
+        )
+
+        form.addRow(
+            self.frequency_start_label,
+            self.start_input,
+        )
+        form.addRow(
+            self.frequency_stop_label,
+            self.stop_input,
+        )
+        form.addRow(
+            self.fixed_frequency_label,
+            self.fixed_frequency_input,
+        )
         form.addRow('MW source:', self.mw_dev_combo)
         form.addRow('MW output:', self.mw_out_combo)
-        form.addRow('RF power:', self.power_input)
+        form.addRow(
+            self.fixed_power_label,
+            self.power_input,
+        )
+        form.addRow(
+            self.power_start_label,
+            self.power_start_input,
+        )
+        form.addRow(
+            self.power_stop_label,
+            self.power_stop_input,
+        )
+
+        self.dynamic_sweep_combo.currentTextChanged.connect(
+            self._update_dynamic_sweep_controls
+        )
 
         # Averaging & Acquisition
         self.avg_input = QtWidgets.QSpinBox()
@@ -1252,6 +1716,9 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.Q_pulse_dur     = QtWidgets.QDoubleSpinBox()
         self.tau_input       = QtWidgets.QDoubleSpinBox()
         self.blocks_input    = QtWidgets.QSpinBox()
+
+        self.tau_input.setRange(0.0, 1e6)
+        self.tau_input.setDecimals(6)
 
         self.I_pulse_dur.setValue(0.25)    # µs
         self.Q_pulse_dur.setValue(0.25)    # µs
@@ -1627,7 +2094,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.live_ps_label = QLabel(
             "Pulse-sequence step: 1/1"
         )
-        self.freq_label = QLabel("Frequency: -- GHz")
+        self.freq_label = QLabel("Dynamic value: --")
         self.voltage_label = QLabel("APD voltage: -- V")
         self.ch0_label = QLabel("CH0: -- V")
         self.ch1_label = QLabel("CH1: -- V")
@@ -1718,6 +2185,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Results Tab
         res = QtWidgets.QWidget()
+        self.results_tab = res
         self.tabs.addTab(res, 'Results')
 
         # ─── File-selector dropdown ───
@@ -1965,6 +2433,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # finally: populate the list
         self._refresh_experiment_list()
+        self._update_dynamic_sweep_controls()
 
 
     def _start_watcher(self):
@@ -2012,18 +2481,34 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         self.sweep_bar.setValue(0)
 
-        # One plotted point per dynamic frequency step. Each point is the
-        # running average of the acquisitions collected at that frequency.
+        # One plotted point per dynamic step. Each point is the running
+        # average of the acquisitions collected at that frequency or power.
         number_steps = max(1, self.dynamic_input.value())
 
-        frequency_axis = np.linspace(
-            self.start_input.value(),
-            self.stop_input.value(),
-            number_steps
+        (
+            self._live_dynamic_parameter,
+            self._live_dynamic_unit,
+            dynamic_axis,
+        ) = self._current_dynamic_axis()
+
+        axis_label = self._dynamic_axis_label(
+            self._live_dynamic_parameter,
+            self._live_dynamic_unit,
         )
 
+        for plot_widget in (
+            self.live_ch0_plot,
+            self.live_ch1_plot,
+            self.live_normalized_plot,
+            self.live_combined_plot,
+        ):
+            plot_widget.setLabel(
+                "bottom",
+                axis_label,
+            )
+
         self.live_freqs = np.tile(
-            frequency_axis,
+            dynamic_axis,
             (ps_steps, 1),
         )
 
@@ -2226,6 +2711,12 @@ class ODMRGui(QtWidgets.QMainWindow):
             )
             return
 
+        power_sweep = (
+            self.dynamic_sweep_combo.currentText()
+            == "Microwave power sweep"
+        )
+    
+
         try:
             ps_sweep = self._collect_ps_sweep_config()
         except ValueError as error:
@@ -2256,6 +2747,21 @@ class ODMRGui(QtWidgets.QMainWindow):
             "freq_start":       self.start_input.value() * 1e9,
             "freq_stop":        self.stop_input.value()  * 1e9,
             "power":            self.power_input.value(),
+            "dynamic_sweep_type": (
+                "power"
+                if power_sweep
+                else "frequency"
+            ),
+            "fixed_frequency": (
+                self.fixed_frequency_input.value()
+                * 1e9
+            ),
+            "power_start": (
+                self.power_start_input.value()
+            ),
+            "power_stop": (
+                self.power_stop_input.value()
+            ),
             "mw_device_type":   self.mw_dev_combo.currentText(),
             "mw_output":        self.mw_out_combo.currentText(),
             "mode":             self.mode_input.currentText(),
@@ -2348,12 +2854,23 @@ class ODMRGui(QtWidgets.QMainWindow):
 
             # ——— now the state‐machine for live plotting ———
             # Frequency may be absent because verbose output is disabled.
-            if freq_m := re.search(
-                rf"frequency.*?({NUMBER_PATTERN})",
-                line,
-                flags=re.IGNORECASE
+            if (
+                getattr(
+                    self,
+                    "_live_dynamic_parameter",
+                    "frequency",
+                )
+                == "frequency"
             ):
-                self._last_freq = float(freq_m.group(1)) / 1e9
+                if freq_m := re.search(
+                    rf"frequency.*?({NUMBER_PATTERN})",
+                    line,
+                    flags=re.IGNORECASE
+                ):
+                    self._last_freq = (
+                        float(freq_m.group(1))
+                        / 1e9
+                    )
 
             if ch0_match := re.search(
                 rf"DAQ_CH0:\s*({NUMBER_PATTERN})",
@@ -2450,7 +2967,18 @@ class ODMRGui(QtWidgets.QMainWindow):
                     % number_steps
                 )
 
-                if hasattr(self, "_last_freq"):
+                if (
+                    getattr(
+                        self,
+                        "_live_dynamic_parameter",
+                        "frequency",
+                    )
+                    == "frequency"
+                    and hasattr(
+                        self,
+                        "_last_freq",
+                    )
+                ):
                     self.live_freqs[
                         ps_index,
                         step_index,
@@ -2595,9 +3123,18 @@ class ODMRGui(QtWidgets.QMainWindow):
                 )
 
 
-                self.freq_label.setText(
-                    f"Frequency: {frequency:.6f} GHz"
-                )
+                if (
+                    self._live_dynamic_parameter
+                    == "microwave_power"
+                ):
+                    self.freq_label.setText(
+                        "Microwave power: "
+                        f"{frequency:.3f} dBm"
+                    )
+                else:
+                    self.freq_label.setText(
+                        f"Frequency: {frequency:.6f} GHz"
+                    )
 
                 self.live_ps_label.setText(
                     "Pulse-sequence step: "
@@ -3008,14 +3545,58 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         ps_index = self.result_ps_step.value()
 
-        frequencies_hz = (
-            self._frequency_axis_from_config(
-                config,
+        (
+            dynamic_parameter,
+            dynamic_unit,
+            dynamic_values,
+        ) = self._dynamic_axis_from_config(
+            config,
+            dynamic_steps,
+        )
+
+        dynamic_values = np.asarray(
+            dynamic_values,
+            dtype=float,
+        ).reshape(-1)
+
+        # Older result files may not contain complete dynamic-axis
+        # metadata. Never pass an x-axis whose length differs from
+        # the stored result's dynamic dimension.
+        if dynamic_values.size != dynamic_steps:
+            logging.warning(
+                "Dynamic-axis length %s does not match result "
+                "dynamic dimension %s. Reconstructing the axis.",
+                dynamic_values.size,
                 dynamic_steps,
             )
+
+            if dynamic_values.size >= 2:
+                dynamic_values = np.linspace(
+                    dynamic_values[0],
+                    dynamic_values[-1],
+                    dynamic_steps,
+                )
+            elif dynamic_values.size == 1:
+                dynamic_values = np.full(
+                    dynamic_steps,
+                    dynamic_values[0],
+                    dtype=float,
+                )
+            else:
+                dynamic_values = np.arange(
+                    dynamic_steps,
+                    dtype=float,
+                )
+
+        dynamic_axis_label = (
+            self._dynamic_axis_label(
+                dynamic_parameter,
+                dynamic_unit,
+            )
         )
-        frequencies_ghz = (
-            frequencies_hz / 1e9
+
+        is_frequency_sweep = (
+            dynamic_parameter == "frequency"
         )
 
         (
@@ -3163,8 +3744,29 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.result_canonical_data = canonical_data
         self.result_analysis_data = analysis_data
         self.result_config = config
-        self.result_freqs_hz = frequencies_hz
-        self.result_freqs_ghz = frequencies_ghz
+        self.result_dynamic_parameter = (
+            dynamic_parameter
+        )
+        self.result_dynamic_unit = dynamic_unit
+        self.result_dynamic_values = dynamic_values
+        self.result_dynamic_axis_label = (
+            dynamic_axis_label
+        )
+        self.result_is_frequency_sweep = (
+            is_frequency_sweep
+        )
+
+        # Retain compatibility attributes for any older helper code.
+        self.result_freqs_ghz = (
+            dynamic_values
+            if is_frequency_sweep
+            else None
+        )
+        self.result_freqs_hz = (
+            dynamic_values * 1e9
+            if is_frequency_sweep
+            else None
+        )
         self.result_ps_parameter = ps_parameter
         self.result_ps_unit = ps_unit
         self.result_ps_values = ps_values
@@ -3172,6 +3774,7 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.result_channel_stds_all = channel_stds_all
         self.result_channel_means = channel_means
         self.result_channel_stds = channel_stds
+        self.result_normalized_all = normalized_all
         self.result_processed_all = processed_all
         self.result_combined_all = combined_all
         self.result_selected_spectrum = selected_y
@@ -3206,6 +3809,10 @@ class ODMRGui(QtWidgets.QMainWindow):
             f"Raw shape: {self.data.shape}\n"
             f"Canonical shape: {canonical_data.shape}\n"
             f"Dynamic steps: {dynamic_steps}\n"
+            f"Dynamic parameter: "
+            f"{dynamic_parameter}\n"
+            f"Dynamic axis unit: "
+            f"{dynamic_unit}\n"
             f"Pulse-sequence steps: {ps_steps}\n"
             f"Selected pulse-sequence step: "
             f"{ps_index + 1}/{ps_steps}\n"
@@ -3216,36 +3823,47 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.proc_plot.clear()
         self.proc_plot.setLabel(
             'bottom',
-            'Frequency (GHz)'
+            dynamic_axis_label
         )
 
         if using_normalized_difference:
-            self.proc_box.setTitle(
-                'Processed ODMR Spectrum — '
-                '(CH0 - CH1) / (CH0 + CH1)'
-            )
+            if is_frequency_sweep:
+                self.proc_box.setTitle(
+                    'Processed ODMR Spectrum — '
+                    '(CH0 - CH1) / (CH0 + CH1)'
+                )
+            else:
+                self.proc_box.setTitle(
+                    'Power-Dependent Referenced Signal — '
+                    '(CH0 - CH1) / (CH0 + CH1)'
+                )
 
             self.proc_plot.setLabel(
                 'left',
                 '(CH0 - CH1) / (CH0 + CH1)'
             )
             self.proc_plot.plot(
-                frequencies_ghz,
+                dynamic_values,
                 selected_y,
                 pen='r',
                 symbol='x'
             )
         else:
-            self.proc_box.setTitle(
-                'Processed ODMR Spectrum — CH0'
-            )
+            if is_frequency_sweep:
+                self.proc_box.setTitle(
+                    'Processed ODMR Spectrum — CH0'
+                )
+            else:
+                self.proc_box.setTitle(
+                    'CH0 Mean vs Microwave Power'
+                )
 
             self.proc_plot.setLabel(
                 'left',
                 'CH0 mean signal'
             )
             self.proc_plot.plot(
-                frequencies_ghz,
+                dynamic_values,
                 selected_y,
                 pen='b',
                 symbol='o'
@@ -3257,16 +3875,26 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.mean_proc_plot.clear()
         self.mean_proc_plot.setLabel(
             'bottom',
-            'Frequency (GHz)'
+            dynamic_axis_label
         )
         self.mean_proc_plot.setLabel(
             'left',
             '(CH0 + CH1) / 2'
         )
 
+        if is_frequency_sweep:
+            self.mean_proc_box.setTitle(
+                'Combined-Channel ODMR Spectrum — '
+                '(CH0 + CH1) / 2'
+            )
+        else:
+            self.mean_proc_box.setTitle(
+                'Combined Signal vs Microwave Power — '
+                '(CH0 + CH1) / 2'
+            )
 
         self.mean_proc_plot.plot(
-            frequencies_ghz,
+            dynamic_values,
             combined_y,
             pen='b',
             symbol='o'
@@ -3282,23 +3910,43 @@ class ODMRGui(QtWidgets.QMainWindow):
             else gaussian
         )
 
-        self._fit_result_spectrum(
-            x_hz=frequencies_hz,
-            y=selected_y,
-            model=model,
-            table=self.fit_table,
-            plot_widget=self.proc_plot,
-            normalized=using_normalized_difference,
-        )
+        if is_frequency_sweep:
+            frequencies_hz = (
+                dynamic_values * 1e9
+            )
 
-        self._fit_result_spectrum(
-            x_hz=frequencies_hz,
-            y=combined_y,
-            model=model,
-            table=self.mean_fit_table,
-            plot_widget=self.mean_proc_plot,
-            normalized=False,
-        )
+            self._fit_result_spectrum(
+                x_hz=frequencies_hz,
+                y=selected_y,
+                model=model,
+                table=self.fit_table,
+                plot_widget=self.proc_plot,
+                normalized=using_normalized_difference,
+            )
+
+            self._fit_result_spectrum(
+                x_hz=frequencies_hz,
+                y=combined_y,
+                model=model,
+                table=self.mean_fit_table,
+                plot_widget=self.mean_proc_plot,
+                normalized=False,
+            )
+        else:
+            # A Lorentzian/Gaussian resonance center and linewidth
+            # have no valid interpretation when the x-axis is power.
+            for table in (
+                self.fit_table,
+                self.mean_fit_table,
+            ):
+                for row in range(
+                    table.rowCount()
+                ):
+                    table.setItem(
+                        row,
+                        1,
+                        QTableWidgetItem("--"),
+                    )
 
         # update the little summary label
         self._draw_result_heatmap()
@@ -3355,7 +4003,9 @@ class ODMRGui(QtWidgets.QMainWindow):
             )
             processed = self.result_processed_all
             combined = self.result_combined_all
-            frequencies = self.result_freqs_ghz
+            dynamic_values = (
+                self.result_dynamic_values
+            )
             ps_values = self.result_ps_values
 
             rows = []
@@ -3369,7 +4019,9 @@ class ODMRGui(QtWidgets.QMainWindow):
                     row = [
                         ps_index,
                         ps_values[ps_index],
-                        frequencies[dynamic_index],
+                        dynamic_values[
+                            dynamic_index
+                        ],
                     ]
 
                     row.extend(
@@ -3418,10 +4070,22 @@ class ODMRGui(QtWidgets.QMainWindow):
                         f"_{unit_column}"
                     )
 
+            if (
+                self.result_dynamic_parameter
+                == "microwave_power"
+            ):
+                dynamic_column = (
+                    "microwave_power_dBm"
+                )
+            else:
+                dynamic_column = (
+                    "frequency_GHz"
+                )
+
             header_fields = [
                 "pulse_sequence_step",
                 parameter_column,
-                "frequency_GHz",
+                dynamic_column,
             ]
 
             header_fields.extend(
@@ -3466,8 +4130,8 @@ class ODMRGui(QtWidgets.QMainWindow):
                     origin="lower",
                     aspect="auto",
                     extent=[
-                        self.result_freqs_ghz[0],
-                        self.result_freqs_ghz[-1],
+                        self.result_dynamic_values[0],
+                        self.result_dynamic_values[-1],
                         -0.5,
                         matrix.shape[0] - 0.5,
                     ],
@@ -3501,7 +4165,9 @@ class ODMRGui(QtWidgets.QMainWindow):
                         f" ({self.result_ps_unit})"
                     )
 
-                axis.set_xlabel("Frequency (GHz)")
+                axis.set_xlabel(
+                    self.result_dynamic_axis_label
+                )
                 axis.set_ylabel(y_label)
                 axis.set_title(
                     self.heatmap_signal_combo.currentText()
@@ -3524,13 +4190,15 @@ class ODMRGui(QtWidgets.QMainWindow):
                     channel_means.shape[0]
                 ):
                     axis.plot(
-                        self.result_freqs_ghz,
+                        self.result_dynamic_values,
                         channel_means[channel_index],
                         "o-",
                         label=f"Channel {channel_index}",
                     )
 
-                axis.set_xlabel("Frequency (GHz)")
+                axis.set_xlabel(
+                    self.result_dynamic_axis_label
+                )
                 axis.set_ylabel(
                     "Mean detector signal"
                 )
@@ -3643,7 +4311,11 @@ class ODMRGui(QtWidgets.QMainWindow):
         # Use the same values calculated in _show_results().
         channel_means = getattr(self, "result_channel_means", None)
         channel_stds = getattr(self, "result_channel_stds", None)
-        freqs_ghz = getattr(self, "result_freqs_ghz", None)
+        dynamic_values = getattr(
+            self,
+            "result_dynamic_values",
+            None,
+        )
 
         if channel_means is None or channel_stds is None:
             QMessageBox.warning(
@@ -3654,14 +4326,19 @@ class ODMRGui(QtWidgets.QMainWindow):
             return
 
         if (
-            freqs_ghz is None
-            or len(freqs_ghz)
+            dynamic_values is None
+            or len(dynamic_values)
             != channel_means.shape[1]
         ):
-            freqs_ghz = np.linspace(
-                self.start_input.value(),
-                self.stop_input.value(),
-                channel_means.shape[1],
+            (
+                _parameter,
+                _unit,
+                dynamic_values,
+            ) = self._current_dynamic_axis()
+
+            dynamic_values = np.asarray(
+                dynamic_values,
+                dtype=float,
             )
 
         current_file = getattr(self, "current_file", None)
@@ -3696,7 +4373,7 @@ class ODMRGui(QtWidgets.QMainWindow):
 
             if self.errb_input.isChecked():
                 axis.errorbar(
-                    freqs_ghz,
+                    dynamic_values,
                     channel_means[channel_index],
                     yerr=channel_stds[channel_index],
                     fmt="o-",
@@ -3704,12 +4381,18 @@ class ODMRGui(QtWidgets.QMainWindow):
                 )
             else:
                 axis.plot(
-                    freqs_ghz,
+                    dynamic_values,
                     channel_means[channel_index],
                     "o-"
                 )
 
-            axis.set_xlabel("Frequency (GHz)")
+            axis.set_xlabel(
+                getattr(
+                    self,
+                    "result_dynamic_axis_label",
+                    "Dynamic value",
+                )
+            )
             axis.set_ylabel("Mean detector signal")
             axis.set_title(
                 f"{default_stem} — "
@@ -3735,7 +4418,14 @@ class ODMRGui(QtWidgets.QMainWindow):
         if not path:
             return
         fields = [
-            'time_unit', 'sweep_start','sweep_stop','power',
+            'time_unit',
+            'dynamic_sweep_type',
+            'sweep_start',
+            'sweep_stop',
+            'fixed_frequency',
+            'power',
+            'power_start',
+            'power_stop',
             'averages','frames','dynamic_steps',
             'mode','ref_channels',
             'mw_duration','read_time','laser_time','max_rate',
@@ -3750,9 +4440,13 @@ class ODMRGui(QtWidgets.QMainWindow):
         ]
         values = [
             self.unit_combo.currentText(),
+            self.dynamic_sweep_combo.currentText(),
             self.start_input.value(),
             self.stop_input.value(),
+            self.fixed_frequency_input.value(),
             self.power_input.value(),
+            self.power_start_input.value(),
+            self.power_stop_input.value(),
             self.avg_input.value(),
             self.frames_input.value(),
             self.dynamic_input.value(),
@@ -3798,9 +4492,39 @@ class ODMRGui(QtWidgets.QMainWindow):
             self.unit_combo.setCurrentText(
                 row.get('time_unit', 'µs')
             )
+            self.dynamic_sweep_combo.setCurrentText(
+                row.get(
+                    'dynamic_sweep_type',
+                    'Frequency sweep',
+                )
+            )
             self.start_input.setValue(float(row['sweep_start']))
             self.stop_input .setValue(float(row['sweep_stop']))
+            self.fixed_frequency_input.setValue(
+                float(
+                    row.get(
+                        'fixed_frequency',
+                        2.87,
+                    )
+                )
+            )
             self.power_input.setValue(float(row['power']))
+            self.power_start_input.setValue(
+                float(
+                    row.get(
+                        'power_start',
+                        0.1,
+                    )
+                )
+            )
+            self.power_stop_input.setValue(
+                float(
+                    row.get(
+                        'power_stop',
+                        8.0
+                    )
+                )
+            )
             self.avg_input  .setValue(int  (row['averages']))
             self.frames_input.setValue(int  (row['frames']))
             self.dynamic_input.setValue(int(row['dynamic_steps']))
@@ -3880,6 +4604,7 @@ class ODMRGui(QtWidgets.QMainWindow):
                 in ("1", "true", "yes")
             )
             self._update_ps_sweep_controls()
+            self._update_dynamic_sweep_controls()
 
         except Exception as e:
             QMessageBox.warning(self, "Error", f"Could not parse configuration:\n{e}")
@@ -3892,6 +4617,10 @@ class ODMRGui(QtWidgets.QMainWindow):
         """Restore all defaults for the selected experiment."""
         self._apply_descriptor_defaults(
             self.exp_combo.currentText()
+        )
+
+        self.dynamic_sweep_combo.setCurrentText(
+            "Frequency sweep"
         )
 
         self.ps_sweep_enable.setChecked(False)
@@ -3912,9 +4641,34 @@ class ODMRGui(QtWidgets.QMainWindow):
                 cfg.get('time_unit', 'µs')
             )
 
+            self.dynamic_sweep_combo.setCurrentText(
+                cfg.get(
+                    'dynamic_sweep_type',
+                    'Frequency sweep',
+                )
+            )
+
             self.start_input .setValue(cfg['sweep_start'])
             self.stop_input  .setValue(cfg['sweep_stop'])
+            self.fixed_frequency_input.setValue(
+                cfg.get(
+                    'fixed_frequency',
+                    2.87,
+                )
+            )
             self.power_input .setValue(cfg['power'])
+            self.power_start_input.setValue(
+                cfg.get(
+                    'power_start',
+                    0.1,
+                )
+            )
+            self.power_stop_input.setValue(
+                cfg.get(
+                    'power_stop',
+                    8.0
+                )
+            )
             self.avg_input   .setValue(cfg['averages'])
             self.frames_input.setValue(cfg['frames'])
             self.dynamic_input.setValue(cfg['dynamic_steps'])
@@ -3994,6 +4748,7 @@ class ODMRGui(QtWidgets.QMainWindow):
                 )
             )
             self._update_ps_sweep_controls()
+            self._update_dynamic_sweep_controls()
             
         except KeyError:
             # silently skip if schema mismatch
@@ -4003,9 +4758,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         """Dump current setup into a JSON file for ‘last used’ recall."""
         cfg = {
             'time_unit':      self.unit_combo.currentText(),
+            'dynamic_sweep_type': (
+                self.dynamic_sweep_combo.currentText()
+            ),
             'sweep_start':   self.start_input.value(),
             'sweep_stop':    self.stop_input.value(),
+            'fixed_frequency': (
+                self.fixed_frequency_input.value()
+            ),
             'power':         self.power_input.value(),
+            'power_start':   self.power_start_input.value(),
+            'power_stop':    self.power_stop_input.value(),
             'averages':      self.avg_input.value(),
             'frames':        self.frames_input.value(),
             'dynamic_steps': self.dynamic_input.value(),
@@ -4260,6 +5023,10 @@ class ODMRGui(QtWidgets.QMainWindow):
         for pulse in desc.get("pulses", []):
             channel = pulse.get("channel")
 
+            # Legacy MW pulses are physically routed through I (channel 4).
+            if channel == "MW":
+                channel = "I"
+
             if (
                 channel == "START"
                 or channel not in self.channel_lanes
@@ -4462,35 +5229,51 @@ class ODMRGui(QtWidgets.QMainWindow):
 
         # Static ODMR/acquisition defaults.
         # Sweep values here are expected to be in GHz.
+        default_frequency_start = float(
+            get_default(
+                "freq_start",
+                "sweep_start",
+                fallback=2.65,
+            )
+        )
+
+        default_frequency_stop = float(
+            get_default(
+                "freq_stop",
+                "sweep_stop",
+                fallback=3.15,
+            )
+        )
+
+        default_power = float(
+            get_default(
+                "power",
+                "rf_power",
+                fallback=1.0,
+            )
+        )
+
+        self.dynamic_sweep_combo.setCurrentText(
+            "Frequency sweep"
+        )
         self.start_input.setValue(
-            float(
-                get_default(
-                    "freq_start",
-                    "sweep_start",
-                    fallback=2.65
-                )
-            )
+            default_frequency_start
         )
-
         self.stop_input.setValue(
-            float(
-                get_default(
-                    "freq_stop",
-                    "sweep_stop",
-                    fallback=3.15
-                )
-            )
+            default_frequency_stop
         )
-
+        self.fixed_frequency_input.setValue(
+            (
+                default_frequency_start
+                + default_frequency_stop
+            )
+            / 2.0
+        )
         self.power_input.setValue(
-            float(
-                get_default(
-                    "power",
-                    "rf_power",
-                    fallback=1.0
-                )
-            )
+            default_power
         )
+        self.power_start_input.setValue(0.1)
+        self.power_stop_input.setValue(8.0)
 
         self.avg_input.setValue(
             int(
@@ -4575,7 +5358,17 @@ class ODMRGui(QtWidgets.QMainWindow):
         self.live_ps_label.setText(
             "Pulse-sequence step: 1/1"
         )
-        self.freq_label.setText("Frequency: -- GHz")
+        if (
+            self.dynamic_sweep_combo.currentText()
+            == "Microwave power sweep"
+        ):
+            self.freq_label.setText(
+                "Microwave power: -- dBm"
+            )
+        else:
+            self.freq_label.setText(
+                "Frequency: -- GHz"
+            )
         self.voltage_label.setText("APD voltage: -- V")
         self.ch0_label.setText("CH0: -- V")
         self.ch1_label.setText("CH1: -- V")
@@ -4600,16 +5393,17 @@ class ODMRGui(QtWidgets.QMainWindow):
             ),
         )
 
-        frequency_axis = np.linspace(
-            self.start_input.value(),
-            self.stop_input.value(),
-            number_steps
-        )
+        (
+            _dynamic_parameter,
+            _dynamic_unit,
+            dynamic_axis,
+        ) = self._current_dynamic_axis()
 
         self.live_freqs = np.tile(
-            frequency_axis,
+            dynamic_axis,
             (ps_steps, 1),
         )
+
         self.live_ch0 = np.full(
             (ps_steps, number_steps),
             np.nan,

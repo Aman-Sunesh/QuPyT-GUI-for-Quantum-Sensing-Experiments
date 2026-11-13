@@ -11,7 +11,6 @@ CHANNEL_MAPPING = {
     'READ':  0,  # Channel 0: APD readout/reset line
     'START': 1,  # Channel 1: Experiment start trigger
     'LASER': 2,  # Channel 2: Laser on/off control
-    'MW':    3,  # Channel 3: Microwave pulse output
-    'I':     4,  # Channel 4: IQ mixer I-component
+    'I':     4,  # Channel 4: IQ mixer I-component / zero-phase MW gate
     'Q':     5,  # Channel 5: IQ mixer Q-component
 }

@@ -611,7 +611,7 @@ class ExperimentEditor(QtWidgets.QDialog):
             ["# PULSES"],
             ["channel","start","duration","blocks"],
             ["START","0","1","wait_loop"],
-            ["MW","{{ buffer_between_pulses }}","{{ mw_duration }}","wait_loop"],
+            ["I","{{ buffer_between_pulses }}","{{ mw_duration }}","wait_loop"],
             ["LASER","{{ buffer_between_pulses*2 + mw_duration }}","{{ laserduration }}","wait_loop"],
             [],
         ]
