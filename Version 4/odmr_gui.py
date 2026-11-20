@@ -33,6 +33,7 @@ from power_supply import PowerSupplyDialog
 from stop_pb import stop_pulse_blaster
 from rf_tab import RFTab
 from controls_tab import ControlsTab
+from antenna_response_tab import AntennaResponseTab
 
 # Global exception hook
 logging.basicConfig(level=logging.ERROR)
@@ -1975,6 +1976,10 @@ class ODMRGui(QtWidgets.QMainWindow):
         # ——— Controls Tab (Version 4): simulated dip tracking and lock-in ———
         self.controls_tab = ControlsTab()
         self.tabs.addTab(self.controls_tab, "Controls")
+
+        # ——— Antenna response Tab (Version 4): read and fit saved Rabi runs ———
+        self.antenna_response_tab = AntennaResponseTab()
+        self.tabs.addTab(self.antenna_response_tab, "Antenna response")
 
 
     def _start_watcher(self):

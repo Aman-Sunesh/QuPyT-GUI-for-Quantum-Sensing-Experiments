@@ -1,0 +1,16 @@
+# Offline GUI, analysis, and tests
+PyQt6
+pyqtgraph
+h5py
+numpy
+scipy
+pytest
+
+# Legacy GUI dependencies
+PyYAML
+matplotlib
+Jinja2
+
+# Lab hardware integration; not required by the offline Antenna response tab
+PyVISA  # Requires a VISA backend and connected instruments for hardware access.
+spinapi  # Requires the SpinCore native driver/library and PulseBlaster hardware.
