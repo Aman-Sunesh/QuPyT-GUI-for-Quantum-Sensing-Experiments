@@ -80,6 +80,65 @@ def test_settings_use_frequency_plus_detuning(tmp_path):
     assert settings.amplitude == 0.2
 
 
+def set_saved_frequency(run, frequency, detuning):
+    sequence = run / "seq0" / "src" / "rabi.seq"
+    text = sequence.read_text(encoding="utf-8")
+    text = text.replace("2875000000.0", str(frequency)).replace("2000000.0", str(detuning))
+    sequence.write_text(text, encoding="utf-8")
+
+
+def test_ghz_scale_frequency_is_converted_to_hz(tmp_path):
+    run = make_synthetic_run(tmp_path)
+    set_saved_frequency(run, 2.86966, 0.0)
+
+    settings = read_microwave_settings(run)
+
+    assert settings.frequency_hz == pytest.approx(2.86966e9)
+    assert settings.driven_frequency_hz == pytest.approx(2.86966e9)
+    assert settings.frequency_warning is None
+    assert "converted saved $freq from GHz to Hz" in settings.frequency_conversion_warning
+    result = analyze_run_folder(run)
+    assert result.can_plot is True
+    assert any(
+        "2.86966 GHz = 2869660000 Hz" in reason
+        for reason in result.warning_reasons
+    )
+
+
+def test_ghz_scale_frequency_with_nonzero_detuning_stays_unknown(tmp_path):
+    run = make_synthetic_run(tmp_path)
+    set_saved_frequency(run, 2.86966, 1e6)
+
+    settings = read_microwave_settings(run)
+
+    assert settings.driven_frequency_hz is None
+    assert "GHz-scale range" in settings.frequency_warning
+    assert "nonzero" in settings.frequency_warning
+    assert settings.frequency_conversion_warning is None
+
+
+def test_out_of_range_frequency_is_rejected(tmp_path):
+    run = make_synthetic_run(tmp_path)
+    set_saved_frequency(run, 50.0, 0.0)
+
+    result = analyze_run_folder(run)
+
+    assert result.settings.driven_frequency_hz is None
+    assert any("saved $freq is 50" in reason for reason in result.warning_reasons)
+    assert result.can_plot is False
+
+
+def test_normal_hz_frequency_is_unchanged(tmp_path):
+    run = make_synthetic_run(tmp_path)
+    settings = read_microwave_settings(run)
+
+    assert settings.frequency_hz == 2.875e9
+    assert settings.detuning_hz == 2e6
+    assert settings.driven_frequency_hz == 2.877e9
+    assert settings.frequency_warning is None
+    assert settings.frequency_conversion_warning is None
+
+
 def test_synthetic_rabi_run_is_loaded_and_fitted(tmp_path):
     run = make_synthetic_run(tmp_path)
     result = analyze_run_folder(run)
@@ -194,35 +253,68 @@ def test_excluded_runs_stay_checked_and_amplitude_groups_use_date_and_frequency(
     app = QtWidgets.QApplication.instance() or QtWidgets.QApplication([])
     tab = AntennaResponseTab()
 
-    def result(name, frequency_hz, amplitude, excluded=False):
+    def result(
+        name, frequency_hz, amplitude, excluded=False, failed=False,
+        frequency_warning=None, rabi_hz=5e6, rabi_err_hz=0.05e6,
+    ):
         item = AntennaRunResult(
             path=Path(name),
             settings=MicrowaveSettings(
                 frequency_hz=frequency_hz,
                 detuning_hz=0.0,
                 amplitude=amplitude,
+                frequency_warning=frequency_warning,
             ),
-            rabi_hz=5e6,
-            rabi_err_hz=0.05e6,
+            rabi_hz=rabi_hz,
+            rabi_err_hz=rabi_err_hz,
             pi_s=100e-9,
             r_squared=0.9,
             periods_in_window=4.0,
         )
         if excluded:
             item.exclusion_reasons = ["fewer than 1 fitted period in the window"]
+        if failed:
+            item.failure_reasons = ["uncertainty is zero or nonfinite"]
         return item
 
     tab.results = [
         result("2026-11-20-10-00-00-rabi", 2.815e9, 0.1),
         result("2026-11-20-10-01-00-rabi", 2.815e9, 0.2),
         result("2026-11-21-10-00-00-rabi", 2.815e9, 0.3),
-        result("2026-11-20-10-02-00-rabi", 2.815e9, 0.01, excluded=True),
+        result(
+            "2026-11-20-10-02-00-rabi", 2.815e9, 0.01, excluded=True,
+            rabi_hz=500e6, rabi_err_hz=100e6,
+        ),
+        result(
+            "2026-11-20-10-03-00-rabi", 2.815e9, 0.4, failed=True,
+            rabi_hz=900e6, rabi_err_hz=800e6,
+        ),
+        result(
+            "2026-11-20-10-04-00-rabi", 2.86, 0.5,
+            frequency_warning="saved frequency has unreadable units",
+            rabi_hz=700e6, rabi_err_hz=600e6,
+        ),
     ]
     tab._populate_table()
 
     assert app is not None
     assert tab.table.item(3, 0).checkState().value == 2
     assert tab.table.item(3, 7).text().startswith("EXCLUDED:")
+    assert tab.table.item(4, 0).checkState().value == 2
+    assert tab.table.item(4, 7).text().startswith("FAILED:")
+    assert tab.table.item(5, 0).checkState().value == 0
+    assert tab.table.item(5, 2).text() == "unknown"
+    assert "Run: 2026-11-20-10-02-00-rabi" in tab.table.item(3, 1).toolTip()
+    assert "Fit quality: EXCLUDED:" in tab.table.item(3, 7).toolTip()
     # Two accepted groups: one for each acquisition date. The excluded series is gray and separate.
     assert len(tab.amplitude_plot.listDataItems()) == 3
+    amplitude_x, amplitude_y = tab.amplitude_plot.viewRange()
+    frequency_x, frequency_y = tab.frequency_plot.viewRange()
+    assert amplitude_x[0] == 0.0
+    assert amplitude_x[1] < 1.0
+    assert amplitude_y[0] == 0.0
+    assert amplitude_y[1] < 10.0
+    assert frequency_x[0] > 2.0
+    assert frequency_y[0] == 0.0
+    assert frequency_y[1] < 10.0
     tab.close()

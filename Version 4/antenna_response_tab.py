@@ -36,6 +36,10 @@ WARN_RELATIVE_UNCERTAINTY = 0.05
 EXCLUDE_BELOW_PERIODS = 1.0
 WARN_BELOW_PERIODS = 2.0
 EDUCONTROL_DIFFERENCE_WARNING = 0.10
+MIN_PLAUSIBLE_DRIVE_HZ = 1e8
+MAX_PLAUSIBLE_DRIVE_HZ = 100e9
+MIN_GHZ_SCALE_FREQUENCY = 1.0
+MAX_GHZ_SCALE_FREQUENCY = 10.0
 UNKNOWN = "unknown"
 
 _NUMBER = r"[-+]?(?:\d+(?:\.\d*)?|\.\d+)(?:[eE][-+]?\d+)?"
@@ -48,10 +52,12 @@ class MicrowaveSettings:
     frequency_hz: float | None = None
     detuning_hz: float | None = None
     amplitude: float | None = None
+    frequency_warning: str | None = None
+    frequency_conversion_warning: str | None = None
 
     @property
     def driven_frequency_hz(self):
-        if self.frequency_hz is None or self.detuning_hz is None:
+        if self.frequency_warning or self.frequency_hz is None or self.detuning_hz is None:
             return None
         return self.frequency_hz + self.detuning_hz
 
@@ -124,7 +130,7 @@ def read_microwave_settings(run_folder):
     exact = run / "seq0" / "src" / "rabi.seq"
     candidates = [exact] if exact.is_file() else sorted(run.rglob("rabi.seq"))
     if not candidates:
-        return MicrowaveSettings()
+        return MicrowaveSettings(frequency_warning="no saved rabi.seq file was found")
 
     source = candidates[0]
     values = {}
@@ -133,11 +139,46 @@ def read_microwave_settings(run_folder):
             match = _SETTING_RE.match(line)
             if match and match.group(1) not in values:
                 values[match.group(1)] = float(match.group(2))
+    saved_frequency = values.get("freq")
+    detuning = values.get("df")
+    warning = None
+    conversion_warning = None
+    frequency = saved_frequency
+    if saved_frequency is None:
+        warning = "$freq is missing from rabi.seq"
+    elif detuning is None:
+        warning = "$df is missing from rabi.seq"
+    elif MIN_GHZ_SCALE_FREQUENCY <= saved_frequency <= MAX_GHZ_SCALE_FREQUENCY:
+        if detuning == 0.0:
+            frequency = saved_frequency * 1e9
+            conversion_warning = (
+                f"converted saved $freq from GHz to Hz: {saved_frequency:.12g} GHz "
+                f"= {frequency:.0f} Hz ($df = 0)"
+            )
+        else:
+            warning = (
+                f"saved $freq is {saved_frequency:g}, which is in the GHz-scale range, "
+                f"but $df is nonzero ({detuning:g}); GHz-to-Hz conversion was not applied"
+            )
+    elif not MIN_PLAUSIBLE_DRIVE_HZ <= saved_frequency <= MAX_PLAUSIBLE_DRIVE_HZ:
+        warning = (
+            f"saved $freq is {saved_frequency:g}; expected either 1 to 10 GHz or "
+            f"{MIN_PLAUSIBLE_DRIVE_HZ:g} to {MAX_PLAUSIBLE_DRIVE_HZ:g} Hz"
+        )
+    else:
+        driven = saved_frequency + detuning
+        if not MIN_PLAUSIBLE_DRIVE_HZ <= driven <= MAX_PLAUSIBLE_DRIVE_HZ:
+            warning = (
+                f"saved $freq + $df is {driven:g}; expected hertz between "
+                f"{MIN_PLAUSIBLE_DRIVE_HZ:g} and {MAX_PLAUSIBLE_DRIVE_HZ:g}"
+            )
     return MicrowaveSettings(
         source=source,
-        frequency_hz=values.get("freq"),
-        detuning_hz=values.get("df"),
+        frequency_hz=frequency,
+        detuning_hz=detuning,
         amplitude=values.get("mwAmp"),
+        frequency_warning=warning,
+        frequency_conversion_warning=conversion_warning,
     )
 
 
@@ -211,6 +252,12 @@ def analyze_run_folder(run_folder):
             )
             if comparison:
                 result.warning_reasons.append(comparison)
+        if result.settings.frequency_warning:
+            result.warning_reasons.append(
+                f"driven frequency unavailable: {result.settings.frequency_warning}"
+            )
+        if result.settings.frequency_conversion_warning:
+            result.warning_reasons.append(result.settings.frequency_conversion_warning)
     except Exception as exc:
         result.error = str(exc)
     return result
@@ -297,17 +344,25 @@ class AntennaResponseTab(QtWidgets.QWidget):
         self.frequency_plot.setLabel("bottom", "Driven microwave frequency (GHz)")
         self.frequency_plot.setLabel("left", "Rabi frequency (MHz)")
         self.frequency_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.frequency_plot.addLegend(offset=(10, 10))
+        self.frequency_plot.setLimits(yMin=0)
+        self.frequency_plot.getAxis("bottom").enableAutoSIPrefix(False)
+        self.frequency_legend = self.frequency_plot.addLegend(offset=(10, 10))
 
         self.amplitude_plot = pg.PlotWidget()
         self.amplitude_plot.setLabel("bottom", "MW amplitude")
         self.amplitude_plot.setLabel("left", "Rabi frequency (MHz)")
         self.amplitude_plot.showGrid(x=True, y=True, alpha=0.3)
-        self.amplitude_plot.addLegend(offset=(10, 10))
+        self.amplitude_plot.setLimits(yMin=0)
+        self.amplitude_plot.getAxis("bottom").enableAutoSIPrefix(False)
+        self.amplitude_legend = self.amplitude_plot.addLegend(offset=(10, 10))
 
         self.plot_pages = QtWidgets.QTabWidget()
-        self.plot_pages.addTab(self.amplitude_plot, "Amplitude response")
-        self.plot_pages.addTab(self.frequency_plot, "Frequency response")
+        self.plot_pages.addTab(
+            self._plot_page(self.amplitude_plot, self.amplitude_legend), "Amplitude response"
+        )
+        self.plot_pages.addTab(
+            self._plot_page(self.frequency_plot, self.frequency_legend), "Frequency response"
+        )
         # Keep the old attribute as an alias for code that used the original single plot.
         self.plot = self.frequency_plot
 
@@ -392,7 +447,7 @@ class AntennaResponseTab(QtWidgets.QWidget):
                     QtWidgets.QTableWidgetItem(_number(result.pi_s, 1e9, 2)),
                     QtWidgets.QTableWidgetItem(_quality(result)),
                 ]
-                tooltip = str(result.path)
+                tooltip = f"Run: {result.path.name}\nPath: {result.path}\nFit quality: {_quality(result)}"
                 if result.settings.source:
                     tooltip += f"\nSettings: {result.settings.source}"
                 if result.excluded:
@@ -463,6 +518,20 @@ class AntennaResponseTab(QtWidgets.QWidget):
                             x_value=lambda result: result.settings.driven_frequency_hz / 1e9,
                             beam=0.002)
 
+        self._set_plot_range(
+            self.amplitude_plot,
+            accepted,
+            x_value=lambda result: result.settings.amplitude,
+            minimum_x_padding=0.01,
+            zero_x=True,
+        )
+        self._set_plot_range(
+            self.frequency_plot,
+            accepted,
+            x_value=lambda result: result.settings.driven_frequency_hz / 1e9,
+            minimum_x_padding=0.005,
+        )
+
         known_amplitudes = sorted({
             result.settings.amplitude for result in self.results
             if result.settings.amplitude is not None
@@ -489,7 +558,9 @@ class AntennaResponseTab(QtWidgets.QWidget):
         if comparison_warnings:
             messages.append(f"{comparison_warnings} fit(s) differ from EduControl by more than 10%.")
         if missing_frequency:
-            messages.append(f"{missing_frequency} run(s) have unknown driven frequency.")
+            messages.append(
+                f"{missing_frequency} run(s) have unknown driven frequency and are not plotted."
+            )
         if missing_amplitude:
             messages.append(f"{missing_amplitude} run(s) have unknown MW amplitude.")
         self.status.setText(" ".join(messages))
@@ -512,13 +583,46 @@ class AntennaResponseTab(QtWidgets.QWidget):
         x = np.array([x_value(result) for result in results])
         y = np.array([result.rabi_hz / 1e6 for result in results])
         err = np.array([result.rabi_err_hz / 1e6 for result in results])
-        plot.plot(
-            x, y, pen=None, symbol="o", symbolSize=8, symbolBrush=gray,
+        points = pg.PlotDataItem(
+            x=x, y=y, pen=None, symbol="o", symbolSize=8, symbolBrush=gray,
             symbolPen=pg.mkPen(gray), name="excluded"
         )
-        plot.addItem(pg.ErrorBarItem(
+        plot.addItem(points, ignoreBounds=True)
+        error_bars = pg.ErrorBarItem(
             x=x, y=y, top=err, bottom=err, beam=beam, pen=pg.mkPen(gray)
-        ))
+        )
+        plot.addItem(error_bars, ignoreBounds=True)
+
+    @staticmethod
+    def _set_plot_range(plot, results, x_value, minimum_x_padding, zero_x=False):
+        """Range from accepted/warning runs only; excluded and failed items stay visible if in range."""
+        if not results:
+            plot.setXRange(0, 1, padding=0)
+            plot.setYRange(0, 1, padding=0)
+            return
+        x = np.array([x_value(result) for result in results], dtype=float)
+        y = np.array([result.rabi_hz / 1e6 for result in results], dtype=float)
+        err = np.array([result.rabi_err_hz / 1e6 for result in results], dtype=float)
+        x_span = float(np.ptp(x))
+        x_padding = max(0.05 * x_span, minimum_x_padding)
+        y_high = float(np.max(y + err))
+        y_padding = max(0.05 * y_high, 0.05)
+        x_low = 0.0 if zero_x else float(np.min(x)) - x_padding
+        plot.setXRange(x_low, float(np.max(x)) + x_padding, padding=0)
+        plot.setYRange(0.0, y_high + y_padding, padding=0)
+
+    @staticmethod
+    def _plot_page(plot, legend):
+        page = QtWidgets.QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        toggle = QtWidgets.QCheckBox("Show legend")
+        toggle.setChecked(False)
+        legend.setVisible(False)
+        toggle.toggled.connect(legend.setVisible)
+        layout.addWidget(toggle, 0, QtCore.Qt.AlignmentFlag.AlignRight)
+        layout.addWidget(plot, 1)
+        return page
 
     def _export_csv(self):
         path, _ = QFileDialog.getSaveFileName(
